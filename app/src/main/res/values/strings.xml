@@ -1,23 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">MusWall</string>
-    <string name="app_description">Automatically create music artwork wallpapers.</string>
-    <string name="notification_access_title">Notification access</string>
-    <string name="notification_access_desc">Allow MusWall to read media notifications and detect currently playing music.</string>
-    <string name="grant_permission">Grant notification access</string>
-    <string name="autostart_title">Autostart</string>
-    <string name="autostart_desc">Allow MusWall to start automatically on Xiaomi/POCO devices.</string>
-    <string name="open_autostart">Open autostart settings</string>
-    <string name="battery_title">Battery/background</string>
-    <string name="battery_desc">Allow background operation so wallpaper updates can continue while music is playing.</string>
-    <string name="open_battery">Open battery settings</string>
-    <string name="automatic_wallpaper">Automatic music wallpaper</string>
-    <string name="restore_on_pause">Restore wallpaper when music pauses</string>
-    <string name="blur">Background blur</string>
-    <string name="darkness">Background darkness</string>
-    <string name="art_scale">Album-art size</string>
-    <string name="screen_target">Wallpaper target</string>
-    <string name="home">Home</string>
-    <string name="lock">Lock screen</string>
-    <string name="both">Home + Lock</string>
 </resources>
