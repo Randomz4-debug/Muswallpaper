@@ -37,11 +37,14 @@ class WallpaperHelper(private val context: Context) {
 
             val currentHomeDrawable = wallpaperManager.drawable
             val homeBitmap = if (currentHomeDrawable is android.graphics.drawable.BitmapDrawable) currentHomeDrawable.bitmap else null
-            homeBitmap?.let {
-                FileOutputStream(homeFile).use { out -> it.compress(Bitmap.CompressFormat.PNG, 100, out) }
-                FileOutputStream(lockFile).use { out -> it.compress(Bitmap.CompressFormat.PNG, 100, out) }
+            if (homeBitmap != null) {
+                FileOutputStream(homeFile).use { out -> homeBitmap.compress(Bitmap.CompressFormat.PNG, 100, out) }
+                // Android's public WallpaperManager API does not expose a separate original
+                // lock-screen image on all devices. Keep a copy for the lock restore path, but
+                // only mark the backup complete after the home image was actually saved.
+                FileOutputStream(lockFile).use { out -> homeBitmap.compress(Bitmap.CompressFormat.PNG, 100, out) }
+                prefs.isOriginalBackedUp = true
             }
-            prefs.isOriginalBackedUp = true
         } catch (e: Exception) {
             Log.e("WallpaperHelper", "Backup failed: ${e.message}")
         }

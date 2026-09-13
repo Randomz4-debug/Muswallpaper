@@ -22,7 +22,7 @@ android {
         python {
             version "3.10"
             pip {
-                install "Pillow==10.2.0"
+                install "Pillow==11.0.0"
             }
         }
     }

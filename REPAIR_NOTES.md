@@ -1,28 +1,23 @@
-# SoundWall repaired project
+# SoundWall repair notes
 
-This copy was repaired for a cleaner Android Studio/Gradle build:
+This package was reviewed as an Android Studio/Gradle project and repaired for phone-only GitHub Actions builds.
 
-- Added repository configuration to settings.gradle.kts when missing.
-- Added missing Android namespace/SDK defaults when missing.
-- Preserved the existing Kotlin + Python/Chaquopy architecture.
-- Hardened the Kotlin/Python bridge so failures are returned instead of silently swallowed.
-- Added a deterministic Pillow `generate_wallpaper()` implementation if the Python module lacked one.
-- Hardened manifest exported handling where needed.
-- Added `.gitignore`.
+## Fixed
+- Corrected malformed `MediaNotificationListenerService` XML in `AndroidManifest.xml`.
+- Added the missing Android resources: `activity_main.xml`, `strings.xml`, and `themes.xml`.
+- Added every `R.id` referenced by `MainActivity`.
+- Moved media-session setup to `NotificationListenerService.onListenerConnected()` so it runs after notification-listener access is granted.
+- Added media-session listener cleanup in `onDestroy()`.
+- Restored saved slider/switch preferences into the UI when the activity starts.
+- Made wallpaper-backup state update only after an actual bitmap was saved.
+- Removed an unused foreground-service permission.
+- Changed GitHub Actions to provision Gradle 8.4 directly with `gradle/actions/setup-gradle@v6`, so the cloud build no longer depends on a `gradle-wrapper.jar` being uploaded.
 
-## Build
+## Verification performed
+- Android XML files parse successfully.
+- All `R.id` references in Kotlin have matching XML declarations.
+- Python wallpaper engine passes Python bytecode compilation.
+- Gradle 8.4 / JDK 17 remains the intended GitHub Actions build environment.
 
-Open this folder in Android Studio and let Gradle sync first.
-
-Then from the project root:
-
-Windows:
-`gradlew.bat assembleDebug`
-
-Linux/macOS:
-`./gradlew assembleDebug`
-
-APK:
-`app/build/outputs/apk/debug/app-debug.apk`
-
-If Gradle reports a dependency/version error, use the FIRST error in the Gradle output; do not repeatedly rerun the same failed command.
+## Note
+The ZIP does not need to contain `gradle/wrapper/gradle-wrapper.jar` because the included GitHub Actions workflow now installs Gradle 8.4 directly. If the repository already contains a wrapper JAR from a previous Termux fix, it can remain there.

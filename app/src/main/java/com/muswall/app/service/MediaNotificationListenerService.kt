@@ -10,15 +10,11 @@ import android.media.session.MediaController
 import android.media.session.MediaSessionManager
 import android.media.session.PlaybackState
 import android.net.Uri
-import android.os.Build
 import android.service.notification.NotificationListenerService
-import android.service.notification.StatusBarNotification
-import android.util.Log
 import com.muswall.app.data.PreferencesManager
 import com.muswall.app.python.PythonBridge
 import com.muswall.app.wallpaper.WallpaperHelper
 import kotlinx.coroutines.*
-import java.io.InputStream
 
 class MediaNotificationListenerService : NotificationListenerService() {
 
@@ -57,6 +53,10 @@ class MediaNotificationListenerService : NotificationListenerService() {
         super.onCreate()
         prefs = PreferencesManager.getInstance(this)
         wallpaperHelper = WallpaperHelper(this)
+    }
+
+    override fun onListenerConnected() {
+        super.onListenerConnected()
         setupMediaSessionManager()
     }
 
@@ -142,11 +142,18 @@ class MediaNotificationListenerService : NotificationListenerService() {
         try {
             mediaSessionManager = getSystemService(Context.MEDIA_SESSION_SERVICE) as? MediaSessionManager
             val componentName = ComponentName(this, MediaNotificationListenerService::class.java)
-            mediaSessionManager?.addOnActiveSessionsChangedListener({ controllers ->
-                val playingController = controllers?.firstOrNull { it.playbackState?.state == PlaybackState.STATE_PLAYING } ?: controllers?.firstOrNull()
-                updateActiveController(playingController)
-            }, componentName)
+            mediaSessionManager?.addOnActiveSessionsChangedListener(activeSessionsListener, componentName)
+            val controllers = mediaSessionManager?.getActiveSessions(componentName)
+            val playingController = controllers?.firstOrNull { it.playbackState?.state == PlaybackState.STATE_PLAYING }
+                ?: controllers?.firstOrNull()
+            updateActiveController(playingController)
         } catch (ignored: Exception) {}
+    }
+
+    private val activeSessionsListener = MediaSessionManager.OnActiveSessionsChangedListener { controllers ->
+        val playingController = controllers?.firstOrNull { it.playbackState?.state == PlaybackState.STATE_PLAYING }
+            ?: controllers?.firstOrNull()
+        updateActiveController(playingController)
     }
 
     private fun updateActiveController(newController: MediaController?) {
@@ -166,5 +173,15 @@ class MediaNotificationListenerService : NotificationListenerService() {
     }
     private fun broadcastWallpaperApplied(msg: String) {
         sendBroadcast(Intent(ACTION_WALLPAPER_APPLIED).putExtra(EXTRA_STATUS_MESSAGE, msg).setPackage(packageName))
+    }
+
+    override fun onDestroy() {
+        try {
+            mediaSessionManager?.removeOnActiveSessionsChangedListener(activeSessionsListener)
+        } catch (ignored: Exception) {}
+        activeController?.unregisterCallback(mediaControllerCallback)
+        activeController = null
+        serviceScope.cancel()
+        super.onDestroy()
     }
 }

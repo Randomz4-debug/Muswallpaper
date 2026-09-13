@@ -1,25 +1,13 @@
 package com.muswall.app.ui
 
-import android.content.BroadcastReceiver
-import android.content.Context
-import android.content.Intent
-import android.content.IntentFilter
 import android.os.Bundle
-import android.provider.Settings
-import android.view.View
-import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
-import androidx.lifecycle.lifecycleScope
 import com.google.android.material.button.MaterialButton
-import com.google.android.material.card.MaterialCardView
 import com.google.android.material.slider.Slider
 import com.google.android.material.switchmaterial.SwitchMaterial
 import com.muswall.app.R
 import com.muswall.app.data.PreferencesManager
-import com.muswall.app.python.PythonBridge
-import com.muswall.app.service.MediaNotificationListenerService
 import com.muswall.app.wallpaper.WallpaperHelper
-import kotlinx.coroutines.launch
 
 class MainActivity : AppCompatActivity() {
     private lateinit var prefs: PreferencesManager
@@ -31,19 +19,31 @@ class MainActivity : AppCompatActivity() {
         prefs = PreferencesManager.getInstance(this)
         wallpaperHelper = WallpaperHelper(this)
 
-        findViewById<Slider>(R.id.sliderBlur).addOnChangeListener { _, value, _ ->
+        val sliderBlur = findViewById<Slider>(R.id.sliderBlur)
+        val sliderDarkness = findViewById<Slider>(R.id.sliderDarkness)
+        val sliderArtScale = findViewById<Slider>(R.id.sliderArtScale)
+        val switchAuto = findViewById<SwitchMaterial>(R.id.switchAutoWallpaper)
+        val switchRestore = findViewById<SwitchMaterial>(R.id.switchRestoreOnPause)
+
+        sliderBlur.value = prefs.blurRadius.toFloat()
+        sliderDarkness.value = prefs.darkness.toFloat()
+        sliderArtScale.value = prefs.artScale.toFloat()
+        switchAuto.isChecked = prefs.isAutoEnabled
+        switchRestore.isChecked = prefs.restoreOnPause
+
+        sliderBlur.addOnChangeListener { _, value, _ ->
             prefs.blurRadius = value.toInt()
         }
-        findViewById<Slider>(R.id.sliderDarkness).addOnChangeListener { _, value, _ ->
+        sliderDarkness.addOnChangeListener { _, value, _ ->
             prefs.darkness = value.toInt()
         }
-        findViewById<Slider>(R.id.sliderArtScale).addOnChangeListener { _, value, _ ->
+        sliderArtScale.addOnChangeListener { _, value, _ ->
             prefs.artScale = value.toInt()
         }
-        findViewById<SwitchMaterial>(R.id.switchAutoWallpaper).setOnCheckedChangeListener { _, isChecked ->
+        switchAuto.setOnCheckedChangeListener { _, isChecked ->
             prefs.isAutoEnabled = isChecked
         }
-        findViewById<SwitchMaterial>(R.id.switchRestoreOnPause).setOnCheckedChangeListener { _, isChecked ->
+        switchRestore.setOnCheckedChangeListener { _, isChecked ->
             prefs.restoreOnPause = isChecked
         }
         findViewById<MaterialButton>(R.id.btnGrantPermission).setOnClickListener {

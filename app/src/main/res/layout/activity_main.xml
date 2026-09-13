@@ -1,0 +1,142 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="20dp">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/app_name"
+            android:textSize="30sp"
+            android:textStyle="bold"
+            android:paddingBottom="4dp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/app_description"
+            android:textSize="15sp"
+            android:paddingBottom="20dp" />
+
+        <com.google.android.material.card.MaterialCardView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="14dp"
+            app:cardUseCompatPadding="true">
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="16dp">
+                <com.google.android.material.switchmaterial.SwitchMaterial
+                    android:id="@+id/switchAutoWallpaper"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/automatic_wallpaper"
+                    android:checked="true" />
+                <com.google.android.material.switchmaterial.SwitchMaterial
+                    android:id="@+id/switchRestoreOnPause"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/restore_on_pause"
+                    android:checked="true" />
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+
+        <com.google.android.material.card.MaterialCardView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="14dp"
+            app:cardUseCompatPadding="true">
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="16dp">
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/blur" />
+                <com.google.android.material.slider.Slider
+                    android:id="@+id/sliderBlur"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:value="35"
+                    android:valueFrom="0"
+                    android:valueTo="100" />
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/darkness" />
+                <com.google.android.material.slider.Slider
+                    android:id="@+id/sliderDarkness"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:value="45"
+                    android:valueFrom="0"
+                    android:valueTo="100" />
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/art_scale" />
+                <com.google.android.material.slider.Slider
+                    android:id="@+id/sliderArtScale"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:value="72"
+                    android:valueFrom="30"
+                    android:valueTo="95" />
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+
+        <com.google.android.material.card.MaterialCardView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="14dp"
+            app:cardUseCompatPadding="true">
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="16dp">
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/notification_access_title"
+                    android:textStyle="bold" />
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/notification_access_desc"
+                    android:paddingTop="4dp"
+                    android:paddingBottom="10dp" />
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnGrantPermission"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/grant_permission" />
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnOpenAutostart"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/open_autostart" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnOpenBatterySaver"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/open_battery" />
+
+    </LinearLayout>
+</ScrollView>
