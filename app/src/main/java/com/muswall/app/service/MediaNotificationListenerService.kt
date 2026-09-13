@@ -13,11 +13,11 @@ import android.net.Uri
 import android.service.notification.NotificationListenerService
 import com.muswall.app.data.PreferencesManager
 import com.muswall.app.python.PythonBridge
+import com.muswall.app.wallpaper.MusicWallpaperService
 import com.muswall.app.wallpaper.WallpaperHelper
 import kotlinx.coroutines.*
 
 class MediaNotificationListenerService : NotificationListenerService() {
-
     companion object {
         const val ACTION_TRACK_CHANGED = "com.muswall.app.ACTION_TRACK_CHANGED"
         const val ACTION_PLAYBACK_STATE_CHANGED = "com.muswall.app.ACTION_PLAYBACK_STATE_CHANGED"
@@ -28,25 +28,25 @@ class MediaNotificationListenerService : NotificationListenerService() {
         const val EXTRA_STATUS_MESSAGE = "extra_status_message"
     }
 
-    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private lateinit var prefs: PreferencesManager
     private lateinit var wallpaperHelper: WallpaperHelper
-    private var mediaSessionManager: MediaSessionManager? = null
+    private var sessionManager: MediaSessionManager? = null
     private var activeController: MediaController? = null
-    private var currentTrackId: String = ""
-    private var isPlaying = false
-    private var hasAppliedMusicWallpaper = false
+    private var currentTrackId = ""
+    private var playing = false
+    private var applied = false
+    private var generationJob: Job? = null
 
-    private val mediaControllerCallback = object : MediaController.Callback() {
-        override fun onPlaybackStateChanged(state: PlaybackState?) {
-            super.onPlaybackStateChanged(state)
-            handlePlaybackState(state)
-        }
+    private val callback = object : MediaController.Callback() {
+        override fun onPlaybackStateChanged(state: PlaybackState?) = handlePlayback(state)
+        override fun onMetadataChanged(metadata: MediaMetadata?) = handleMetadata(metadata)
+    }
 
-        override fun onMetadataChanged(metadata: MediaMetadata?) {
-            super.onMetadataChanged(metadata)
-            handleMetadata(metadata)
-        }
+    private val sessionsListener = MediaSessionManager.OnActiveSessionsChangedListener { controllers ->
+        val best = controllers?.firstOrNull { it.playbackState?.state == PlaybackState.STATE_PLAYING }
+            ?: controllers?.firstOrNull()
+        switchController(best)
     }
 
     override fun onCreate() {
@@ -57,131 +57,141 @@ class MediaNotificationListenerService : NotificationListenerService() {
 
     override fun onListenerConnected() {
         super.onListenerConnected()
-        setupMediaSessionManager()
+        connectSessions()
     }
 
-    private fun handlePlaybackState(state: PlaybackState?) {
-        val playbackState = state?.state ?: PlaybackState.STATE_NONE
-        val nowPlaying = (playbackState == PlaybackState.STATE_PLAYING)
-        val wasPlaying = isPlaying
-        isPlaying = nowPlaying
-        broadcastPlaybackState(isPlaying)
+    private fun connectSessions() {
+        try {
+            sessionManager = getSystemService(Context.MEDIA_SESSION_SERVICE) as MediaSessionManager
+            val component = ComponentName(this, MediaNotificationListenerService::class.java)
+            sessionManager?.addOnActiveSessionsChangedListener(sessionsListener, component)
+            val controllers = sessionManager?.getActiveSessions(component)
+            switchController(controllers?.firstOrNull { it.playbackState?.state == PlaybackState.STATE_PLAYING } ?: controllers?.firstOrNull())
+        } catch (_: SecurityException) {
+            broadcastWallpaperApplied("Media access is not connected. Re-enable Notification access.")
+        } catch (_: Exception) {
+        }
+    }
 
-        // REQUIREMENT: Restore separate original wallpapers when music stops or pauses
-        if (wasPlaying && !nowPlaying && prefs.restoreOnPause && hasAppliedMusicWallpaper) {
-            serviceScope.launch {
-                wallpaperHelper.restoreOriginalWallpapers()
-                hasAppliedMusicWallpaper = false
-                broadcastWallpaperApplied("Restored original wallpaper(s)")
+    private fun switchController(controller: MediaController?) {
+        if (controller?.sessionToken == activeController?.sessionToken) {
+            controller?.metadata?.let { handleMetadata(it) }
+            controller?.playbackState?.let { handlePlayback(it) }
+            return
+        }
+        activeController?.unregisterCallback(callback)
+        activeController = controller
+        controller?.registerCallback(callback)
+        handlePlayback(controller?.playbackState)
+        handleMetadata(controller?.metadata)
+    }
+
+    private fun handlePlayback(state: PlaybackState?) {
+        val now = state?.state == PlaybackState.STATE_PLAYING
+        val was = playing
+        playing = now
+        broadcastPlaybackState(now)
+        if (was && !now && prefs.restoreOnPause && applied) {
+            scope.launch {
+                wallpaperHelper.copyOriginalToLiveCache()
+                if (!prefs.liveWallpaperEnabled) wallpaperHelper.restoreOriginal()
+                else sendBroadcast(Intent(MusicWallpaperService.ACTION_REFRESH).setPackage(packageName))
+                applied = false
+                broadcastWallpaperApplied("Original wallpaper restored")
             }
         }
     }
 
     private fun handleMetadata(metadata: MediaMetadata?) {
         if (metadata == null) return
-        val title = metadata.getString(MediaMetadata.METADATA_KEY_TITLE) ?: "Unknown Title"
-        val artist = metadata.getString(MediaMetadata.METADATA_KEY_ARTIST) ?: "Unknown Artist"
-        val trackIdentifier = "$title - $artist"
-        broadcastTrackInfo(title, artist)
+        val title = metadata.getString(MediaMetadata.METADATA_KEY_TITLE)?.trim().orEmpty().ifEmpty { "Unknown title" }
+        val artist = metadata.getString(MediaMetadata.METADATA_KEY_ARTIST)?.trim().orEmpty().ifEmpty { "Unknown artist" }
+        broadcastTrack(title, artist)
+        prefs.lastTrackTitle = title
+        prefs.lastArtist = artist
 
-        if (trackIdentifier == currentTrackId && hasAppliedMusicWallpaper) return
-        currentTrackId = trackIdentifier
-
-        if (!prefs.isAutoEnabled || !isPlaying) return
-
-        val artworkBitmap = extractArtwork(metadata) ?: return
-        processAndApplyWallpaper(artworkBitmap, title, artist)
+        val id = "$title\u0000$artist"
+        if (id == currentTrackId) return
+        currentTrackId = id
+        if (!prefs.isAutoEnabled || !playing || prefs.wallpaperMode != PreferencesManager.MODE_MUSIC) return
+        val art = extractArtwork(metadata) ?: return
+        queueWallpaper(art)
     }
 
-    fun processAndApplyWallpaper(artwork: Bitmap, title: String, artist: String) {
-        serviceScope.launch {
-            val displayMetrics = resources.displayMetrics
-            val targetW = if (displayMetrics.widthPixels > 0) displayMetrics.widthPixels else 1080
-            val targetH = if (displayMetrics.heightPixels > 0) displayMetrics.heightPixels else 2400
-
-            val wallpaperBitmap = PythonBridge.generateWallpaper(
-                srcBitmap = artwork,
-                targetWidth = targetW,
-                targetHeight = targetH,
-                blurRadius = prefs.blurRadius.toFloat(),
-                darkness = prefs.darkness / 100f,
-                artScale = prefs.artScale / 100f,
-                cornerRadius = 40,
-                addShadow = true
+    private fun queueWallpaper(artwork: Bitmap) {
+        generationJob?.cancel()
+        generationJob = scope.launch {
+            // Small debounce prevents several media-session callbacks from doing expensive Python work.
+            delay(180)
+            val dm = resources.displayMetrics
+            val targetW = (dm.widthPixels * 0.75f).toInt().coerceIn(480, 900)
+            val targetH = (dm.heightPixels * 0.75f).toInt().coerceIn(960, 1800)
+            val result = PythonBridge.generateWallpaper(
+                artwork,
+                targetW,
+                targetH,
+                prefs.blurRadius.toFloat(),
+                prefs.darkness / 100f,
+                prefs.artScale / 100f,
+                42,
+                true,
+                prefs.effect,
+                prefs.blurType,
+                prefs.coverHeight,
+                prefs.coverOffset,
+                prefs.transitionHeight
             )
-
-            if (wallpaperBitmap != null) {
-                val result = wallpaperHelper.applyWallpaper(wallpaperBitmap, prefs.targetScreen)
-                if (result.success) {
-                    hasAppliedMusicWallpaper = true
-                    broadcastWallpaperApplied("Wallpaper applied to ${prefs.targetScreen}")
-                } else {
-                    broadcastWallpaperApplied("Failed: ${result.errorMessage}")
-                }
+            if (result == null) {
+                broadcastWallpaperApplied("Could not render artwork")
+                return@launch
+            }
+            wallpaperHelper.saveCurrentForLiveWallpaper(result)
+            if (prefs.liveWallpaperEnabled) {
+                sendBroadcast(Intent(MusicWallpaperService.ACTION_REFRESH).setPackage(packageName))
+                applied = true
+                broadcastWallpaperApplied("Live wallpaper updated")
+            } else {
+                val apply = wallpaperHelper.applyStatic(result, prefs.targetScreen)
+                applied = apply.success
+                broadcastWallpaperApplied(if (apply.success) "Wallpaper updated" else "Failed: ${apply.message ?: "unknown error"}")
             }
         }
     }
 
     private fun extractArtwork(metadata: MediaMetadata): Bitmap? {
-        var bitmap = metadata.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART) ?: metadata.getBitmap(MediaMetadata.METADATA_KEY_ART)
-        if (bitmap != null) return bitmap
-
-        val uriString = metadata.getString(MediaMetadata.METADATA_KEY_ALBUM_ART_URI) ?: metadata.getString(MediaMetadata.METADATA_KEY_ART_URI)
-        if (!uriString.isNullOrEmpty()) {
-            try {
-                val stream = contentResolver.openInputStream(Uri.parse(uriString))
-                bitmap = BitmapFactory.decodeStream(stream)
-                stream?.close()
-                return bitmap
-            } catch (ignored: Exception) {}
+        metadata.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART)?.let { return it }
+        metadata.getBitmap(MediaMetadata.METADATA_KEY_ART)?.let { return it }
+        val uriText = metadata.getString(MediaMetadata.METADATA_KEY_ALBUM_ART_URI)
+            ?: metadata.getString(MediaMetadata.METADATA_KEY_ART_URI)
+        if (!uriText.isNullOrBlank()) {
+            return try {
+                contentResolver.openInputStream(Uri.parse(uriText)).use { BitmapFactory.decodeStream(it) }
+            } catch (_: Exception) { null }
         }
         return null
     }
 
-    private fun setupMediaSessionManager() {
-        try {
-            mediaSessionManager = getSystemService(Context.MEDIA_SESSION_SERVICE) as? MediaSessionManager
-            val componentName = ComponentName(this, MediaNotificationListenerService::class.java)
-            mediaSessionManager?.addOnActiveSessionsChangedListener(activeSessionsListener, componentName)
-            val controllers = mediaSessionManager?.getActiveSessions(componentName)
-            val playingController = controllers?.firstOrNull { it.playbackState?.state == PlaybackState.STATE_PLAYING }
-                ?: controllers?.firstOrNull()
-            updateActiveController(playingController)
-        } catch (ignored: Exception) {}
+    private fun broadcastTrack(title: String, artist: String) {
+        sendBroadcast(Intent(ACTION_TRACK_CHANGED).setPackage(packageName)
+            .putExtra(EXTRA_TRACK_TITLE, title).putExtra(EXTRA_ARTIST, artist))
     }
 
-    private val activeSessionsListener = MediaSessionManager.OnActiveSessionsChangedListener { controllers ->
-        val playingController = controllers?.firstOrNull { it.playbackState?.state == PlaybackState.STATE_PLAYING }
-            ?: controllers?.firstOrNull()
-        updateActiveController(playingController)
+    private fun broadcastPlaybackState(isPlaying: Boolean) {
+        sendBroadcast(Intent(ACTION_PLAYBACK_STATE_CHANGED).setPackage(packageName)
+            .putExtra(EXTRA_IS_PLAYING, isPlaying))
     }
 
-    private fun updateActiveController(newController: MediaController?) {
-        if (newController == null || newController.sessionToken == activeController?.sessionToken) return
-        activeController?.unregisterCallback(mediaControllerCallback)
-        activeController = newController
-        activeController?.registerCallback(mediaControllerCallback)
-        handlePlaybackState(newController.playbackState)
-        handleMetadata(newController.metadata)
-    }
-
-    private fun broadcastTrackInfo(title: String, artist: String) {
-        sendBroadcast(Intent(ACTION_TRACK_CHANGED).putExtra(EXTRA_TRACK_TITLE, title).putExtra(EXTRA_ARTIST, artist).setPackage(packageName))
-    }
-    private fun broadcastPlaybackState(playing: Boolean) {
-        sendBroadcast(Intent(ACTION_PLAYBACK_STATE_CHANGED).putExtra(EXTRA_IS_PLAYING, playing).setPackage(packageName))
-    }
-    private fun broadcastWallpaperApplied(msg: String) {
-        sendBroadcast(Intent(ACTION_WALLPAPER_APPLIED).putExtra(EXTRA_STATUS_MESSAGE, msg).setPackage(packageName))
+    private fun broadcastWallpaperApplied(message: String) {
+        sendBroadcast(Intent(ACTION_WALLPAPER_APPLIED).setPackage(packageName)
+            .putExtra(EXTRA_STATUS_MESSAGE, message))
     }
 
     override fun onDestroy() {
-        try {
-            mediaSessionManager?.removeOnActiveSessionsChangedListener(activeSessionsListener)
-        } catch (ignored: Exception) {}
-        activeController?.unregisterCallback(mediaControllerCallback)
+        generationJob?.cancel()
+        try { sessionManager?.removeOnActiveSessionsChangedListener(sessionsListener) } catch (_: Exception) {}
+        activeController?.unregisterCallback(callback)
         activeController = null
-        serviceScope.cancel()
+        scope.cancel()
         super.onDestroy()
     }
 }

@@ -1,127 +1,94 @@
-"""
-MusWall Wallpaper Engine (Python + Pillow)
-===========================================
-This module handles all image-processing logic for MusWall using the Pillow library.
-It is invoked from Kotlin via Chaquopy.
-"""
-
+"""Fast MusWall image renderer. Kept deliberately small for low-end phones."""
 import io
-from typing import Tuple
 from PIL import Image, ImageFilter, ImageEnhance, ImageDraw, ImageOps
 
-DEFAULT_WIDTH = 1080
-DEFAULT_HEIGHT = 2400
 
-def create_rounded_mask(size: Tuple[int, int], radius: int) -> Image.Image:
-    w, h = size
-    scale = 2
-    mask = Image.new("L", (w * scale, h * scale), 0)
-    draw = ImageDraw.Draw(mask)
-    draw.rounded_rectangle(
-        [(0, 0), (w * scale, h * scale)],
-        radius=radius * scale,
-        fill=255
-    )
-    return mask.resize((w, h), Image.Resampling.LANCZOS)
+def _fit(im, size):
+    return ImageOps.fit(im, size, method=Image.Resampling.LANCZOS, centering=(0.5, 0.5))
 
-def create_drop_shadow(
-    size: Tuple[int, int],
-    radius: int,
-    offset: Tuple[int, int] = (0, 15),
-    blur: int = 25,
-    shadow_color: Tuple[int, int, int, int] = (0, 0, 0, 160)
-) -> Image.Image:
-    w, h = size
-    padding = blur * 3
-    shadow_w = w + padding * 2
-    shadow_h = h + padding * 2
-    
-    shadow_img = Image.new("RGBA", (shadow_w, shadow_h), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(shadow_img)
-    left = padding + offset[0]
-    top = padding + offset[1]
-    draw.rounded_rectangle(
-        [(left, top), (left + w, top + h)],
-        radius=radius,
-        fill=shadow_color
-    )
-    return shadow_img.filter(ImageFilter.GaussianBlur(blur))
 
-def process_wallpaper(
-    artwork_bytes: bytes,
-    target_width: int = DEFAULT_WIDTH,
-    target_height: int = DEFAULT_HEIGHT,
-    blur_radius: float = 35.0,
-    darkness: float = 0.45,
-    art_scale: float = 0.72,
-    corner_radius: int = 40,
-    add_shadow: bool = True,
-    output_format: str = "JPEG",
-    quality: int = 92
-) -> bytes:
+def _round(im, radius):
+    mask = Image.new("L", im.size, 0)
+    ImageDraw.Draw(mask).rounded_rectangle((0, 0, im.width - 1, im.height - 1), radius=radius, fill=255)
+    out = Image.new("RGBA", im.size, (0, 0, 0, 0))
+    out.paste(im, (0, 0), mask)
+    return out
+
+
+def process_wallpaper(artwork_bytes: bytes, target_width=720, target_height=1600,
+                      blur_radius=80.0, darkness=0.0, art_scale=0.72,
+                      corner_radius=42, add_shadow=True, effect="BLUR",
+                      blur_type="GAUSSIAN", cover_height=44, cover_offset=50,
+                      transition_height=20, output_format="JPEG", quality=88):
     if not artwork_bytes:
-        raise ValueError("artwork_bytes cannot be empty")
+        raise ValueError("empty artwork")
 
-    src_image = Image.open(io.BytesIO(artwork_bytes))
-    src_image = ImageOps.exif_transpose(src_image)
-    if src_image.mode != "RGBA":
-        src_image = src_image.convert("RGBA")
+    src = Image.open(io.BytesIO(artwork_bytes)).convert("RGBA")
+    # Work at a bounded resolution: this is a major lag/memory reduction on budget phones.
+    w = max(480, min(int(target_width), 1080))
+    h = max(960, min(int(target_height), 2400))
+    bg = _fit(src, (w, h))
 
-    # Aspect fill background crop & blur
-    bg_image = ImageOps.fit(
-        src_image,
-        (target_width, target_height),
-        method=Image.Resampling.LANCZOS,
-        centering=(0.5, 0.5)
-    )
+    if effect in ("BLUR", "COVER", "COVER_COLOR"):
+        # Downsample before blur; visually similar but much cheaper.
+        sw, sh = max(96, w // 5), max(160, h // 5)
+        small = bg.resize((sw, sh), Image.Resampling.BILINEAR)
+        radius = max(0.0, min(float(blur_radius), 100.0)) / 5.0
+        if blur_type == "SOLID":
+            bg = small.resize((w, h), Image.Resampling.BILINEAR)
+        elif blur_type == "MOTION":
+            b = small.filter(ImageFilter.GaussianBlur(radius=max(1, radius)))
+            bg = b.resize((w, h), Image.Resampling.BILINEAR)
+        elif blur_type == "GLASS":
+            b = small.filter(ImageFilter.GaussianBlur(radius=max(2, radius * 1.4)))
+            bg = b.resize((w, h), Image.Resampling.BILINEAR)
+            bg = ImageEnhance.Brightness(bg).enhance(1.06)
+        else:
+            b = small.filter(ImageFilter.GaussianBlur(radius=max(1, radius)))
+            bg = b.resize((w, h), Image.Resampling.BILINEAR)
+    elif effect == "CD":
+        bg = _fit(src, (w, h)).filter(ImageFilter.GaussianBlur(8))
+    elif effect == "SQUARE":
+        bg = _fit(src, (w, h))
 
-    if blur_radius > 0:
-        small_w = max(64, target_width // 4)
-        small_h = max(64, target_height // 4)
-        bg_small = bg_image.resize((small_w, small_h), Image.Resampling.BILINEAR)
-        bg_blurred_small = bg_small.filter(ImageFilter.GaussianBlur(radius=blur_radius / 4.0))
-        bg_image = bg_blurred_small.resize((target_width, target_height), Image.Resampling.BICUBIC)
+    d = max(0.0, min(float(darkness) / 100.0, 1.0))
+    if d:
+        bg = ImageEnhance.Brightness(bg).enhance(1.0 - d * 0.65)
+        overlay = Image.new("RGBA", (w, h), (0, 0, 0, int(d * 150)))
+        bg = Image.alpha_composite(bg, overlay)
 
-    if darkness > 0.0:
-        clamped_darkness = min(max(darkness, 0.0), 0.95)
-        enhancer = ImageEnhance.Brightness(bg_image)
-        bg_image = enhancer.enhance(1.0 - (clamped_darkness * 0.75))
-        alpha = int(clamped_darkness * 255 * 0.55)
-        overlay = Image.new("RGBA", (target_width, target_height), (0, 0, 0, alpha))
-        bg_image = Image.alpha_composite(bg_image, overlay)
-
-    art_target_w = int(target_width * min(max(art_scale, 0.3), 0.95))
-    art_target_h = art_target_w
-    resized_art = src_image.resize((art_target_w, art_target_h), Image.Resampling.LANCZOS)
-
-    if corner_radius > 0:
-        mask = create_rounded_mask((art_target_w, art_target_h), corner_radius)
-        rounded_art = Image.new("RGBA", (art_target_w, art_target_h), (0, 0, 0, 0))
-        rounded_art.paste(resized_art, (0, 0), mask=mask)
-        resized_art = rounded_art
-
-    center_x = (target_width - art_target_w) // 2
-    center_y = int((target_height - art_target_h) * 0.46)
-
-    if add_shadow and corner_radius > 0:
-        shadow_blur = 30
-        shadow = create_drop_shadow(
-            size=(art_target_w, art_target_h),
-            radius=corner_radius,
-            offset=(0, 18),
-            blur=shadow_blur,
-            shadow_color=(0, 0, 0, 180)
-        )
-        shadow_padding = shadow_blur * 3
-        bg_image.paste(shadow, (center_x - shadow_padding, center_y - shadow_padding), mask=shadow)
-
-    bg_image.paste(resized_art, (center_x, center_y), mask=resized_art)
-
-    output_buffer = io.BytesIO()
-    if output_format.upper() == "PNG":
-        bg_image.save(output_buffer, format="PNG", optimize=True)
+    # Centered album art / cover card.
+    size = int(min(w, h) * max(0.2, min(float(art_scale), 1.0)))
+    art = _fit(src, (size, size))
+    if effect == "CD":
+        # Simple disc look without expensive transforms.
+        mask = Image.new("L", art.size, 0)
+        ImageDraw.Draw(mask).ellipse((0, 0, size - 1, size - 1), fill=255)
+        disc = Image.new("RGBA", art.size, (0, 0, 0, 0))
+        disc.paste(art, (0, 0), mask)
+        art = disc
+    elif effect == "SQUARE":
+        art = _round(art, 18)
     else:
-        rgb_image = bg_image.convert("RGB")
-        rgb_image.save(output_buffer, format="JPEG", quality=quality, optimize=True)
+        art = _round(art, int(corner_radius))
 
-    return output_buffer.getvalue()
+    y_ratio = max(0.05, min(0.95, 0.46 + (cover_offset - 50) / 250.0))
+    x = (w - size) // 2
+    y = int((h - size) * y_ratio)
+
+    if add_shadow:
+        shadow = Image.new("RGBA", (size + 50, size + 50), (0, 0, 0, 0))
+        ImageDraw.Draw(shadow).rounded_rectangle((25, 25, size + 24, size + 24), radius=30, fill=(0, 0, 0, 145))
+        shadow = shadow.filter(ImageFilter.GaussianBlur(14))
+        bg.alpha_composite(shadow, (x - 25, y - 25))
+    bg.alpha_composite(art, (x, y))
+
+    if effect == "COVER_COLOR":
+        # Subtle color wash from the cover's average color.
+        avg = src.resize((1, 1), Image.Resampling.BILINEAR).getpixel((0, 0))
+        wash = Image.new("RGBA", (w, h), (avg[0], avg[1], avg[2], 28))
+        bg = Image.alpha_composite(bg, wash)
+
+    out = io.BytesIO()
+    bg.convert("RGB").save(out, format=output_format, quality=quality, optimize=True)
+    return out.getvalue()

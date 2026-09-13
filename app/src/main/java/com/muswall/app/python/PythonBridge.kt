@@ -11,25 +11,27 @@ import java.io.ByteArrayOutputStream
 object PythonBridge {
     suspend fun generateWallpaper(
         srcBitmap: Bitmap,
-        targetWidth: Int = 1080,
-        targetHeight: Int = 2400,
-        blurRadius: Float = 35f,
-        darkness: Float = 0.45f,
+        targetWidth: Int = 720,
+        targetHeight: Int = 1600,
+        blurRadius: Float = 80f,
+        darkness: Float = 0f,
         artScale: Float = 0.72f,
-        cornerRadius: Int = 40,
-        addShadow: Boolean = true
+        cornerRadius: Int = 42,
+        addShadow: Boolean = true,
+        effect: String = "BLUR",
+        blurType: String = "GAUSSIAN",
+        coverHeight: Int = 44,
+        coverOffset: Int = 50,
+        transitionHeight: Int = 20
     ): Bitmap? = withContext(Dispatchers.Default) {
         try {
             val py = Python.getInstance()
             val module: PyObject = py.getModule("wallpaper_engine")
-
             val stream = ByteArrayOutputStream()
-            srcBitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)
-            val artworkBytes = stream.toByteArray()
-
-            val resultPyObj: PyObject = module.callAttr(
+            srcBitmap.compress(Bitmap.CompressFormat.JPEG, 88, stream)
+            val result = module.callAttr(
                 "process_wallpaper",
-                artworkBytes,
+                stream.toByteArray(),
                 targetWidth,
                 targetHeight,
                 blurRadius.toDouble(),
@@ -37,12 +39,17 @@ object PythonBridge {
                 artScale.toDouble(),
                 cornerRadius,
                 addShadow,
+                effect,
+                blurType,
+                coverHeight,
+                coverOffset,
+                transitionHeight,
                 "JPEG",
-                92
+                88
             )
-            val outputBytes = resultPyObj.toJava(ByteArray::class.java)
-            BitmapFactory.decodeByteArray(outputBytes, 0, outputBytes.size)
-        } catch (e: Throwable) {
+            val bytes = result.toJava(ByteArray::class.java)
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+        } catch (_: Throwable) {
             null
         }
     }

@@ -1,7 +1,9 @@
 package com.muswall.app.wallpaper
 
 import android.app.WallpaperManager
+import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.os.Build
@@ -17,8 +19,9 @@ class WallpaperHelper(private val context: Context) {
     private val prefs = PreferencesManager.getInstance(context)
 
     companion object {
-        private const val FILE_ORIGINAL_HOME = "original_home.png"
-        private const val FILE_ORIGINAL_LOCK = "original_lock.png"
+        private const val TAG = "MusWallWallpaper"
+        private const val FILE_ORIGINAL = "original_wallpaper.png"
+        const val FILE_CURRENT = "current_music_wallpaper.jpg"
 
         fun isXiaomiOrPoco(): Boolean {
             val m = Build.MANUFACTURER.lowercase()
@@ -27,76 +30,100 @@ class WallpaperHelper(private val context: Context) {
         }
     }
 
-    data class ApplyResult(val success: Boolean, val appliedTarget: String, val lockScreenSupported: Boolean, val errorMessage: String? = null)
+    fun currentWallpaperFile(): File = File(context.filesDir, FILE_CURRENT)
 
-    suspend fun backupOriginalWallpapersIfNeeded() = withContext(Dispatchers.IO) {
-        if (prefs.isOriginalBackedUp) return@withContext
+    suspend fun saveCurrentForLiveWallpaper(bitmap: Bitmap) = withContext(Dispatchers.IO) {
+        val tmp = File(context.filesDir, "$FILE_CURRENT.tmp")
+        val dst = currentWallpaperFile()
+        FileOutputStream(tmp).use { bitmap.compress(Bitmap.CompressFormat.JPEG, 88, it) }
+        if (!tmp.renameTo(dst)) {
+            dst.delete()
+            tmp.renameTo(dst)
+        }
+        prefs.lastArtworkPath = dst.absolutePath
+    }
+
+    suspend fun backupOriginalIfNeeded() = withContext(Dispatchers.IO) {
+        if (prefs.originalBackedUp) return@withContext
         try {
-            val homeFile = File(context.filesDir, FILE_ORIGINAL_HOME)
-            val lockFile = File(context.filesDir, FILE_ORIGINAL_LOCK)
-
-            val currentHomeDrawable = wallpaperManager.drawable
-            val homeBitmap = if (currentHomeDrawable is android.graphics.drawable.BitmapDrawable) currentHomeDrawable.bitmap else null
-            if (homeBitmap != null) {
-                FileOutputStream(homeFile).use { out -> homeBitmap.compress(Bitmap.CompressFormat.PNG, 100, out) }
-                // Android's public WallpaperManager API does not expose a separate original
-                // lock-screen image on all devices. Keep a copy for the lock restore path, but
-                // only mark the backup complete after the home image was actually saved.
-                FileOutputStream(lockFile).use { out -> homeBitmap.compress(Bitmap.CompressFormat.PNG, 100, out) }
-                prefs.isOriginalBackedUp = true
+            val drawable = wallpaperManager.drawable
+            val bitmap = (drawable as? android.graphics.drawable.BitmapDrawable)?.bitmap
+            if (bitmap != null) {
+                FileOutputStream(File(context.filesDir, FILE_ORIGINAL)).use {
+                    bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)
+                }
+                prefs.originalBackedUp = true
             }
         } catch (e: Exception) {
-            Log.e("WallpaperHelper", "Backup failed: ${e.message}")
+            Log.e(TAG, "Backup failed", e)
         }
     }
 
-    suspend fun applyWallpaper(wallpaperBitmap: Bitmap, targetScreen: String): ApplyResult = withContext(Dispatchers.IO) {
-        backupOriginalWallpapersIfNeeded()
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
-            wallpaperManager.setBitmap(wallpaperBitmap)
-            return@withContext ApplyResult(true, "BOTH", true)
-        }
-
-        var targetFlag = when (targetScreen) {
-            PreferencesManager.TARGET_HOME -> WallpaperManager.FLAG_SYSTEM
-            PreferencesManager.TARGET_LOCK -> WallpaperManager.FLAG_LOCK
-            else -> WallpaperManager.FLAG_SYSTEM or WallpaperManager.FLAG_LOCK
-        }
-
+    suspend fun applyStatic(bitmap: Bitmap, target: String): ApplyResult = withContext(Dispatchers.IO) {
+        backupOriginalIfNeeded()
         try {
-            wallpaperManager.setBitmap(wallpaperBitmap, null, true, targetFlag)
-            ApplyResult(true, targetScreen, true)
-        } catch (se: SecurityException) {
-            try {
-                wallpaperManager.setBitmap(wallpaperBitmap, null, true, WallpaperManager.FLAG_SYSTEM)
-                ApplyResult(true, PreferencesManager.TARGET_HOME, false, "MIUI restricted lock screen; applied to home screen.")
-            } catch (e: Exception) {
-                ApplyResult(false, targetScreen, false, e.message)
-            }
-        }
-    }
-
-    suspend fun restoreOriginalWallpapers(): Boolean = withContext(Dispatchers.IO) {
-        val homeFile = File(context.filesDir, FILE_ORIGINAL_HOME)
-        val lockFile = File(context.filesDir, FILE_ORIGINAL_LOCK)
-        try {
-            if (homeFile.exists()) {
-                val b = BitmapFactory.decodeFile(homeFile.absolutePath)
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                    wallpaperManager.setBitmap(b, null, true, WallpaperManager.FLAG_SYSTEM)
-                } else {
-                    wallpaperManager.setBitmap(b)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                val flags = when (target) {
+                    PreferencesManager.TARGET_HOME -> WallpaperManager.FLAG_SYSTEM
+                    PreferencesManager.TARGET_LOCK -> WallpaperManager.FLAG_LOCK
+                    else -> WallpaperManager.FLAG_SYSTEM or WallpaperManager.FLAG_LOCK
                 }
+                wallpaperManager.setBitmap(bitmap, null, true, flags)
+                ApplyResult(true, target, null)
+            } else {
+                wallpaperManager.setBitmap(bitmap)
+                ApplyResult(true, PreferencesManager.TARGET_BOTH, null)
             }
-            if (lockFile.exists() && Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                val b = BitmapFactory.decodeFile(lockFile.absolutePath)
-                try {
-                    wallpaperManager.setBitmap(b, null, true, WallpaperManager.FLAG_LOCK)
-                } catch (ignored: Exception) {}
+        } catch (e: SecurityException) {
+            try {
+                wallpaperManager.setBitmap(bitmap, null, true, WallpaperManager.FLAG_SYSTEM)
+                ApplyResult(true, PreferencesManager.TARGET_HOME, "Lock-screen wallpaper is restricted by the device; home screen was updated.")
+            } catch (fallback: Exception) {
+                ApplyResult(false, target, fallback.message)
+            }
+        } catch (e: Exception) {
+            ApplyResult(false, target, e.message)
+        }
+    }
+
+    fun openLiveWallpaperPicker() {
+        try {
+            val component = ComponentName(context, MusicWallpaperService::class.java)
+            val intent = Intent(WallpaperManager.ACTION_CHANGE_LIVE_WALLPAPER).apply {
+                putExtra(WallpaperManager.EXTRA_LIVE_WALLPAPER_COMPONENT, component)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(intent)
+        } catch (_: Exception) {
+            val intent = Intent(WallpaperManager.ACTION_LIVE_WALLPAPER_CHOOSER).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(intent)
+        }
+    }
+
+    suspend fun copyOriginalToLiveCache(): Boolean = withContext(Dispatchers.IO) {
+        val original = File(context.filesDir, FILE_ORIGINAL)
+        if (!original.exists()) return@withContext false
+        return@withContext try {
+            original.copyTo(currentWallpaperFile(), overwrite = true)
+            true
+        } catch (_: Exception) { false }
+    }
+
+    suspend fun restoreOriginal(): Boolean = withContext(Dispatchers.IO) {
+        val file = File(context.filesDir, FILE_ORIGINAL)
+        if (!file.exists()) return@withContext false
+        return@withContext try {
+            val bitmap = BitmapFactory.decodeFile(file.absolutePath) ?: return@withContext false
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                wallpaperManager.setBitmap(bitmap, null, true, WallpaperManager.FLAG_SYSTEM)
+            } else {
+                wallpaperManager.setBitmap(bitmap)
             }
             true
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             false
         }
     }
+
+    data class ApplyResult(val success: Boolean, val target: String, val message: String?)
 }
