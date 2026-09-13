@@ -20,7 +20,7 @@
         <TextView android:id="@+id/compatibilityRow" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="◴  Compatibility Mode\n      Switch wallpaper instantly when music changes" android:textSize="17sp" android:padding="20dp"/>
         <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Feedback" android:textSize="18sp" android:textColor="#4B7048" android:layout_marginTop="20dp"/>
         <TextView android:id="@+id/feedbackRow" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="✉  Send Feedback\n      We value your suggestions" android:textSize="17sp" android:padding="20dp"/>
-        <TextView android:id="@+id/faqRow" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="?  FAQ\n      Frequently asked questions" android:textSize="17sp" android:padding="20dp"/>
+        <TextView android:id="@+id/faqRow" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="FAQ\n      Frequently asked questions" android:textSize="17sp" android:padding="20dp"/>
         <TextView android:id="@+id/updateRow" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="⟳  Check for Updates\n      Version 1.9.0" android:textSize="17sp" android:padding="20dp"/>
     </LinearLayout>
 </ScrollView>
