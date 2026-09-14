@@ -25,15 +25,18 @@ jobs:
       - name: Apply sync, highlight and glass widget fixes
         run: python3 tools/fix_sync_glass_performance.py
 
+      - name: Apply POCO lock, restore and performance fixes
+        run: python3 tools/fix_poco_lock_and_performance.py
+
       - name: Commit source fixes
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add app/src/main/java/com/muswall/app/ui/SettingsActivity.kt app/src/main/java/com/muswall/app/service/MediaNotificationListenerService.kt app/src/main/java/com/muswall/app/wallpaper/MusicWallpaperService.kt app/src/main/java/com/muswall/app/widget/MusicWidgetProvider.kt app/src/main/res/layout/widget_music.xml app/src/main/java/com/muswall/app/data/PreferencesManager.kt tools/fix_sync_glass_performance.py
+          git add app/src/main/java/com/muswall/app/ui/SettingsActivity.kt app/src/main/java/com/muswall/app/service/MediaNotificationListenerService.kt app/src/main/java/com/muswall/app/wallpaper/MusicWallpaperService.kt app/src/main/java/com/muswall/app/wallpaper/WallpaperHelper.kt app/src/main/java/com/muswall/app/widget/MusicWidgetProvider.kt app/src/main/res/layout/widget_music.xml app/src/main/java/com/muswall/app/data/PreferencesManager.kt tools/fix_sync_glass_performance.py tools/fix_poco_lock_and_performance.py
           if git diff --cached --quiet; then
             echo "No source changes to commit"
           else
-            git commit -m "Fix lyric sync highlighting and glass widget"
+            git commit -m "Fix POCO lock wallpaper restore and performance"
             git push
           fi
 
