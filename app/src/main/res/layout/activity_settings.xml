@@ -74,11 +74,20 @@
             android:textSize="18sp" />
 
         <TextView
-            android:id="@+id/restoreRow"
+            android:id="@+id/restoreHomeRow"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:padding="20dp"
-            android:text="Restore wallpaper\nSelect the wallpaper shown when music stops"
+            android:text="Original Home Wallpaper\nChoose the wallpaper restored on the home screen when music stops"
+            android:textColor="#20241E"
+            android:textSize="17sp" />
+
+        <TextView
+            android:id="@+id/restoreLockRow"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:padding="20dp"
+            android:text="Original Lock Wallpaper\nChoose the wallpaper restored on the lock screen when music stops"
             android:textColor="#20241E"
             android:textSize="17sp" />
 
@@ -103,10 +112,13 @@
                 android:text="Apply effects to Restore\nApply the same effects to the Restore Wallpaper"
                 android:textColor="#20241E"
                 android:textSize="16sp" />
-            <com.google.android.material.materialswitch.MaterialSwitch
+            <androidx.appcompat.widget.SwitchCompat
                 android:id="@+id/effectsRestore"
                 android:layout_width="wrap_content"
-                android:layout_height="wrap_content" />
+                android:layout_height="wrap_content"
+                android:showText="false"
+                android:textOn=""
+                android:textOff="" />
         </LinearLayout>
 
         <TextView
@@ -175,7 +187,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:padding="20dp"
-            android:text="Check for Updates\nVersion 1.9.3"
+            android:text="Check for Updates\nVersion 1.9.4"
             android:textColor="#20241E"
             android:textSize="17sp" />
 
