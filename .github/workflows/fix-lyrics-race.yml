@@ -1,0 +1,47 @@
+name: Fix lyrics async race
+
+on:
+  push:
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Patch lyrics loader
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path('app/src/main/java/com/muswall/app/service/MediaNotificationListenerService.kt')
+          s = p.read_text(encoding='utf-8')
+          old = s
+          s = s.replace('val token = generation.get()\n        val title = metadata.getString(MediaMetadata.METADATA_KEY_TITLE)?.trim().orEmpty()', 'val token = System.nanoTime()\n        val title = metadata.getString(MediaMetadata.METADATA_KEY_TITLE)?.trim().orEmpty()', 1)
+          s = s.replace('if (token == generation.get() && playing) {\n                    prefs.lastLyrics = translateIfNeeded(immediate)', 'if (playing) {\n                    prefs.lastLyrics = translateIfNeeded(immediate)', 1)
+          s = s.replace('if (token == generation.get() && playing) {\n                prefs.lastLyrics = "[00:00.00] Loading lyrics…"', 'if (playing) {\n                prefs.lastLyrics = "[00:00.00] Loading lyrics…"', 1)
+          s = s.replace('if (token != generation.get() || !playing) return@launch\n            prefs.lastLyrics = if (resolved.isNotBlank())', 'if (!playing) return@launch\n            prefs.lastLyrics = if (resolved.isNotBlank())', 1)
+          if s == old:
+              print('No lyrics-race patch needed')
+          else:
+              p.write_text(s, encoding='utf-8')
+              print('Lyrics race patched')
+
+      - name: Commit patch and remove one-time workflow
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          rm -f .github/workflows/fix-lyrics-race.yml
+          git add app/src/main/java/com/muswall/app/service/MediaNotificationListenerService.kt .github/workflows/fix-lyrics-race.yml
+          if git diff --cached --quiet; then
+            echo 'Nothing to commit'
+          else
+            git commit -m 'Fix lyrics loading race'
+            git push
+          fi
