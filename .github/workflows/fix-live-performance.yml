@@ -1,0 +1,185 @@
+name: Fix live wallpaper performance
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch live wallpaper and media pipeline
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          wp = Path('app/src/main/java/com/muswall/app/wallpaper/MusicWallpaperService.kt')
+          s = wp.read_text()
+
+          # Cache parsed lyrics and reuse the bass Paint object. The old implementation
+          # parsed the entire lyrics string and allocated Paint/shaders on every frame.
+          s = s.replace(
+              '        private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { typeface = android.graphics.Typeface.create("sans", android.graphics.Typeface.NORMAL) }\n',
+              '        private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { typeface = android.graphics.Typeface.create("sans", android.graphics.Typeface.NORMAL) }\n        private val bassPaintCache = Paint(Paint.ANTI_ALIAS_FLAG)\n        private var cachedLyricsRaw = ""\n        private var cachedLyricLines: List<LyricLine> = emptyList()\n        private var lastSurfaceWidth = 0\n        private var lastSurfaceHeight = 0\n'
+          )
+
+          old = '''        private fun currentLyricLines(): List<String> {
+            if (!prefs.showLyrics) return emptyList()
+            val raw = prefs.lastLyrics.trim()
+            if (raw.isBlank()) return emptyList()
+            val synced = parseLrc(raw)
+            if (synced.isNotEmpty()) {
+                val index = synced.indexOfLast { it.time <= playbackPosition }.coerceAtLeast(0)
+                val from = maxOf(0, index - 1)
+                return synced.subList(from, minOf(synced.size, from + prefs.lyricsLines)).map { it.text }.filter { it.isNotBlank() }
+            }
+            val plain = raw.lines().map { it.trim() }.filter { it.isNotBlank() }
+            if (plain.isEmpty()) return emptyList()
+            val estimatedIndex = ((playbackPosition / 1000L) / maxOf(1L, prefs.lastLyrics.length / 12L)).toInt().coerceIn(0, plain.lastIndex)
+            val from = maxOf(0, estimatedIndex - 1)
+            return plain.subList(from, minOf(plain.size, from + prefs.lyricsLines))
+        }
+'''
+          new = '''        private fun currentLyricLines(): List<String> {
+            if (!prefs.showLyrics) return emptyList()
+            val raw = prefs.lastLyrics.trim()
+            if (raw.isBlank()) return emptyList()
+            if (raw != cachedLyricsRaw) {
+                cachedLyricsRaw = raw
+                cachedLyricLines = parseLrc(raw)
+            }
+            val synced = cachedLyricLines
+            if (synced.isNotEmpty()) {
+                val index = synced.indexOfLast { it.time <= playbackPosition }.coerceAtLeast(0)
+                val from = maxOf(0, index - 1)
+                return synced.subList(from, minOf(synced.size, from + prefs.lyricsLines)).map { it.text }.filter { it.isNotBlank() }
+            }
+            val plain = raw.lines().map { it.trim() }.filter { it.isNotBlank() }
+            if (plain.isEmpty()) return emptyList()
+            val estimatedIndex = ((playbackPosition / 1000L) / maxOf(1L, raw.length / 12L)).toInt().coerceIn(0, plain.lastIndex)
+            val from = maxOf(0, estimatedIndex - 1)
+            return plain.subList(from, minOf(plain.size, from + prefs.lyricsLines))
+        }
+'''
+          if old not in s:
+              raise SystemExit('currentLyricLines block not found')
+          s = s.replace(old, new)
+
+          old = '''        private fun bassPaint(canvas: Canvas): Paint {
+            val c1 = parseColor(prefs.bassColor, Color.WHITE)
+            val c2 = parseColor(prefs.bassColor2, Color.CYAN)
+            val c3 = parseColor(prefs.bassColor3, Color.MAGENTA)
+            val p = Paint(Paint.ANTI_ALIAS_FLAG)
+            p.alpha = 205
+            p.shader = when (prefs.bassColorMode) {
+                PreferencesManager.COLOR_GRADIENT, PreferencesManager.COLOR_DOUBLE -> LinearGradient(0f, 0f, canvas.width.toFloat(), 0f, c1, c2, Shader.TileMode.CLAMP)
+                PreferencesManager.COLOR_RAINBOW -> LinearGradient(0f, 0f, canvas.width.toFloat(), 0f, intArrayOf(c1, c2, c3, Color.MAGENTA), null, Shader.TileMode.MIRROR)
+                else -> null
+            }
+            p.color = c1
+            return p
+        }
+'''
+          new = '''        private fun bassPaint(canvas: Canvas): Paint {
+            val c1 = parseColor(prefs.bassColor, Color.WHITE)
+            val c2 = parseColor(prefs.bassColor2, Color.CYAN)
+            val c3 = parseColor(prefs.bassColor3, Color.MAGENTA)
+            val p = bassPaintCache
+            p.reset()
+            p.isAntiAlias = true
+            p.alpha = 205
+            p.color = c1
+            p.shader = when (prefs.bassColorMode) {
+                PreferencesManager.COLOR_GRADIENT, PreferencesManager.COLOR_DOUBLE -> LinearGradient(0f, 0f, canvas.width.toFloat(), 0f, c1, c2, Shader.TileMode.CLAMP)
+                PreferencesManager.COLOR_RAINBOW -> LinearGradient(0f, 0f, canvas.width.toFloat(), 0f, intArrayOf(c1, c2, c3, Color.MAGENTA), null, Shader.TileMode.MIRROR)
+                else -> null
+            }
+            return p
+        }
+'''
+          if old not in s:
+              raise SystemExit('bassPaint block not found')
+          s = s.replace(old, new)
+
+          # Hardware canvas greatly reduces software bitmap scaling stalls on modern Android.
+          old = '                canvas = holder.lockCanvas() ?: return\n'
+          new = '''                canvas = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    try { holder.lockHardwareCanvas() } catch (_: Throwable) { holder.lockCanvas() }
+                } else holder.lockCanvas()
+                if (canvas == null) return
+'''
+          if old not in s:
+              raise SystemExit('lockCanvas line not found')
+          s = s.replace(old, new)
+
+          # Do not recycle the cached bitmap while a draw is using it; it is only replaced on a new file.
+          # Also clear lyric cache when the engine is destroyed.
+          s = s.replace(
+              '            cachedBitmap = null\n            drawThread.quitSafely()',
+              '            cachedBitmap = null\n            cachedLyricsRaw = ""\n            cachedLyricLines = emptyList()\n            drawThread.quitSafely()'
+          )
+          wp.write_text(s)
+
+          media = Path('app/src/main/java/com/muswall/app/service/MediaNotificationListenerService.kt')
+          m = media.read_text()
+
+          # Keep the main service responsive and prevent a stale lyric translation/network job
+          # from delaying the next artwork generation. Lyrics are resolved independently.
+          m = m.replace(
+              '    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)\n',
+              '    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)\n'
+          )
+
+          # The live wallpaper should be fed position updates less frequently; its own draw loop
+          # interpolates visual frames through the surface. 250 ms is enough for lyric timing and saves CPU.
+          m = m.replace('            timelineHandler.postDelayed(this, 200L)\n', '            timelineHandler.postDelayed(this, 250L)\n')
+
+          # On pause/stop, restore the original lock wallpaper while preserving all song metadata/widget data.
+          old = '''            prefs.liveMusicPlaying = false
+            sendBroadcast(
+                Intent(ACTION_LIVE_TICK)
+                    .setPackage(packageName)
+                    .putExtra(EXTRA_POSITION_MS, prefs.lyricsPosition)
+            )
+            refreshLive()
+            broadcastWallpaperApplied("Music paused • wallpaper state updated")
+'''
+          new = '''            prefs.liveMusicPlaying = false
+            try { wallpaperHelper.restoreOriginalLock() } catch (t: Throwable) {
+                Log.w("MusWallMedia", "Failed to restore original lock wallpaper", t)
+            }
+            sendBroadcast(
+                Intent(ACTION_LIVE_TICK)
+                    .setPackage(packageName)
+                    .putExtra(EXTRA_POSITION_MS, prefs.lyricsPosition)
+            )
+            refreshLive()
+            broadcastWallpaperApplied("Music paused • original wallpaper restored")
+'''
+          if old not in m:
+              raise SystemExit('pause block not found')
+          m = m.replace(old, new)
+          media.write_text(m)
+
+          print('patched live wallpaper performance')
+          PY
+      - name: Verify changed sources
+        run: |
+          grep -n "lockHardwareCanvas\|cachedLyricLines\|scope = CoroutineScope\|restoreOriginalLock" app/src/main/java/com/muswall/app/wallpaper/MusicWallpaperService.kt app/src/main/java/com/muswall/app/service/MediaNotificationListenerService.kt
+      - name: Commit changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/src/main/java/com/muswall/app/wallpaper/MusicWallpaperService.kt app/src/main/java/com/muswall/app/service/MediaNotificationListenerService.kt
+          git diff --cached --quiet || git commit -m "Fix live wallpaper lag during lyrics and bass"
+          git push
+      - name: Remove one-time workflow
+        if: always()
+        run: |
+          git rm -f .github/workflows/fix-live-performance.yml || true
+          git commit -m "Remove one-time live performance fixer" || true
+          git push || true
