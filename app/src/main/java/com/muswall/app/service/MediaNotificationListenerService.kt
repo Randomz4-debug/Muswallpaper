@@ -41,15 +41,8 @@ class MediaNotificationListenerService : NotificationListenerService() {
     private var generationJob: Job? = null
 
     private val callback = object : MediaController.Callback() {
-        override fun onPlaybackStateChanged(state: PlaybackState?) {
-            handlePlayback(state)
-        }
-
-        override fun onMetadataChanged(metadata: MediaMetadata?) {
-            // A real metadata event means the track/artwork may have changed.
-            handleMetadata(metadata, force = true)
-        }
-
+        override fun onPlaybackStateChanged(state: PlaybackState?) = handlePlayback(state)
+        override fun onMetadataChanged(metadata: MediaMetadata?) = handleMetadata(metadata, force = true)
         override fun onSessionDestroyed() {
             handlePlayback(null)
             refreshActiveSessions()
@@ -103,8 +96,6 @@ class MediaNotificationListenerService : NotificationListenerService() {
 
     private fun switchController(controller: MediaController?) {
         if (controller?.sessionToken == activeController?.sessionToken) {
-            // Refresh state without treating every notification/session refresh as
-            // a new track. Playback and metadata callbacks handle actual changes.
             controller?.playbackState?.let { handlePlayback(it) }
             controller?.metadata?.let { handleMetadata(it, force = false) }
             if (controller == null) handlePlayback(null)
@@ -138,19 +129,16 @@ class MediaNotificationListenerService : NotificationListenerService() {
             generation.incrementAndGet()
             generationJob?.cancel()
             currentTrackId = ""
-            if (was && prefs.restoreOnPause && prefs.liveWallpaperEnabled) {
-                prefs.liveMusicPlaying = false
+            prefs.liveMusicPlaying = false
+            if (prefs.liveWallpaperEnabled && prefs.restoreOnPause) {
                 sendBroadcast(Intent(MusicWallpaperService.ACTION_REFRESH).setPackage(packageName))
                 broadcastWallpaperApplied("Music stopped • original wallpaper restored")
             } else if (prefs.liveWallpaperEnabled) {
-                prefs.liveMusicPlaying = false
                 sendBroadcast(Intent(MusicWallpaperService.ACTION_REFRESH).setPackage(packageName))
             }
             return
         }
 
-        // Only a transition from stopped -> playing needs a forced metadata read.
-        // Position updates while a song is playing must NOT rerender the wallpaper.
         if (!was) activeController?.metadata?.let { handleMetadata(it, force = true) }
     }
 
@@ -170,9 +158,6 @@ class MediaNotificationListenerService : NotificationListenerService() {
         currentTrackId = id
 
         if (!prefs.isAutoEnabled || !playing || prefs.wallpaperMode != PreferencesManager.MODE_MUSIC) return
-
-        // Music mode has exactly one wallpaper path: the installed live wallpaper.
-        // WallpaperManager.setBitmap() is deliberately never called here.
         if (!prefs.liveWallpaperEnabled) {
             broadcastWallpaperApplied("Music detected • enable MusWall Live Wallpaper once")
             return
@@ -185,11 +170,8 @@ class MediaNotificationListenerService : NotificationListenerService() {
                 broadcastWallpaperApplied("Track detected, but no album artwork was available")
                 return@launch
             }
-            try {
-                renderAndSendToLiveWallpaper(art, token)
-            } finally {
-                if (!art.isRecycled) art.recycle()
-            }
+            try { renderAndSendToLiveWallpaper(art, token) }
+            finally { if (!art.isRecycled) art.recycle() }
         }
     }
 
@@ -197,13 +179,14 @@ class MediaNotificationListenerService : NotificationListenerService() {
         val dm = resources.displayMetrics
         val targetW = (dm.widthPixels * 0.58f).toInt().coerceIn(480, 720)
         val targetH = (dm.heightPixels * 0.58f).toInt().coerceIn(900, 1440)
+        if (token != generation.get() || !playing || !prefs.liveWallpaperEnabled) return
+        wallpaperHelper.saveLastArtwork(artwork)
         val result = PythonBridge.generateWallpaper(
             artwork, targetW, targetH,
             prefs.blurRadius.toFloat(), prefs.darkness / 100f, prefs.artScale / 100f,
             42, true, prefs.effect, prefs.blurType,
             prefs.coverHeight, prefs.coverOffset, prefs.transitionHeight
         ) ?: return
-
         try {
             if (token != generation.get() || !playing || !prefs.liveWallpaperEnabled) return
             wallpaperHelper.saveCurrentForLiveWallpaper(result)
@@ -211,9 +194,7 @@ class MediaNotificationListenerService : NotificationListenerService() {
             prefs.liveMusicPlaying = true
             sendBroadcast(Intent(MusicWallpaperService.ACTION_REFRESH).setPackage(packageName))
             broadcastWallpaperApplied("Live wallpaper updated instantly")
-        } finally {
-            if (!result.isRecycled) result.recycle()
-        }
+        } finally { if (!result.isRecycled) result.recycle() }
     }
 
     private fun extractArtwork(metadata: MediaMetadata): Bitmap? {
@@ -224,10 +205,7 @@ class MediaNotificationListenerService : NotificationListenerService() {
                 ?: metadata.getString(MediaMetadata.METADATA_KEY_ART_URI)
             if (!uriText.isNullOrBlank()) {
                 contentResolver.openInputStream(Uri.parse(uriText)).use { input ->
-                    if (input != null) {
-                        val opts = BitmapFactory.Options().apply { inPreferredConfig = Bitmap.Config.RGB_565 }
-                        BitmapFactory.decodeStream(input, null, opts)?.let { bmp -> downsampleArtwork(bmp) }
-                    } else null
+                    if (input != null) BitmapFactory.decodeStream(input)?.let { downsampleArtwork(it) } else null
                 }
             } else null
         } catch (t: Throwable) {
@@ -247,38 +225,25 @@ class MediaNotificationListenerService : NotificationListenerService() {
             Bitmap.createScaledBitmap(source, w, h, true).also {
                 if (it !== source && !source.isRecycled) source.recycle()
             }
-        } catch (_: Throwable) {
-            try { bitmap.copy(Bitmap.Config.ARGB_8888, false) } catch (_: Throwable) { null }
-        }
+        } catch (_: Throwable) { null }
     }
 
-    private fun broadcastTrack(title: String, artist: String) {
-        sendBroadcast(Intent(ACTION_TRACK_CHANGED).setPackage(packageName)
-            .putExtra(EXTRA_TRACK_TITLE, title).putExtra(EXTRA_ARTIST, artist))
-    }
+    private fun broadcastTrack(title: String, artist: String) =
+        sendBroadcast(Intent(ACTION_TRACK_CHANGED).setPackage(packageName).putExtra(EXTRA_TRACK_TITLE, title).putExtra(EXTRA_ARTIST, artist))
 
-    private fun broadcastPlaybackState(isPlaying: Boolean) {
-        sendBroadcast(Intent(ACTION_PLAYBACK_STATE_CHANGED).setPackage(packageName)
-            .putExtra(EXTRA_IS_PLAYING, isPlaying))
-    }
+    private fun broadcastPlaybackState(isPlaying: Boolean) =
+        sendBroadcast(Intent(ACTION_PLAYBACK_STATE_CHANGED).setPackage(packageName).putExtra(EXTRA_IS_PLAYING, isPlaying))
 
-    private fun broadcastWallpaperApplied(message: String) {
-        sendBroadcast(Intent(ACTION_WALLPAPER_APPLIED).setPackage(packageName)
-            .putExtra(EXTRA_STATUS_MESSAGE, message))
-    }
+    private fun broadcastWallpaperApplied(message: String) =
+        sendBroadcast(Intent(ACTION_WALLPAPER_APPLIED).setPackage(packageName).putExtra(EXTRA_STATUS_MESSAGE, message))
 
-    override fun onNotificationPosted(sbn: android.service.notification.StatusBarNotification?) {
-        refreshActiveSessions()
-    }
-
-    override fun onNotificationRemoved(sbn: android.service.notification.StatusBarNotification?) {
-        refreshActiveSessions()
-    }
+    override fun onNotificationPosted(sbn: android.service.notification.StatusBarNotification?) = refreshActiveSessions()
+    override fun onNotificationRemoved(sbn: android.service.notification.StatusBarNotification?) = refreshActiveSessions()
 
     override fun onDestroy() {
         generation.incrementAndGet()
         generationJob?.cancel()
-        try { sessionManager?.removeOnActiveSessionsChangedListener(sessionsListener) } catch (_: Exception) {}
+        try { sessionManager?.removeOnActiveSessionsChangedListener(sessionsListener) } catch (_: Throwable) {}
         try { activeController?.unregisterCallback(callback) } catch (_: Throwable) {}
         activeController = null
         scope.cancel()
