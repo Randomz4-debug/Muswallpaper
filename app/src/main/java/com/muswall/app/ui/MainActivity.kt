@@ -10,8 +10,6 @@ import android.os.Bundle
 import android.provider.Settings
 import android.text.TextUtils
 import android.view.View
-import android.widget.LinearLayout
-import android.widget.Button
 import android.widget.ImageView
 import android.widget.PopupMenu
 import android.widget.Toast
@@ -85,6 +83,9 @@ class MainActivity : AppCompatActivity() {
 
         prefs = PreferencesManager.getInstance(this)
         wallpaperHelper = WallpaperHelper(this)
+
+        // Only register the application context. Chaquopy/Python is still lazy.
+        com.muswall.app.python.PythonBridge.initialize(this)
 
         imageHome = findViewById(R.id.imageHomePreview)
         imageLock = findViewById(R.id.imageLockPreview)
@@ -195,7 +196,8 @@ class MainActivity : AppCompatActivity() {
             R.id.sliderDarkness -> prefs.darkness
             else -> prefs.artScale
         }
-        slider.value = savedValue.toFloat().coerceIn(slider.valueFrom, slider.valueTo)
+        val safeValue = savedValue.toFloat().coerceIn(slider.valueFrom, slider.valueTo)
+        slider.value = safeValue
         label.text = "$name   ${slider.value.toInt()}"
         slider.addOnChangeListener { _, value, _ ->
             val n = value.toInt()
@@ -324,10 +326,10 @@ class MainActivity : AppCompatActivity() {
 
     private fun applyCurrent() {
         uiScope.launch {
-            val source = when {
-                selectedUri != null -> decodeUriForRender(selectedUri!!)
-                File(filesDir, WallpaperHelper.FILE_CURRENT).exists() -> decodeSampled(File(filesDir, WallpaperHelper.FILE_CURRENT), 1600, 1600)
-                else -> null
+            val source = if (prefs.wallpaperMode == PreferencesManager.MODE_STATIC) {
+                selectedUri?.let { decodeUriForRender(it) }
+            } else {
+                File(filesDir, WallpaperHelper.FILE_CURRENT).takeIf { it.exists() }?.let { decodeSampled(it, 1600, 1600) }
             }
             if (source == null) {
                 Toast.makeText(this@MainActivity, "Choose an image or play music first", Toast.LENGTH_LONG).show()
@@ -349,10 +351,15 @@ class MainActivity : AppCompatActivity() {
                 val result = wallpaperHelper.applyStatic(rendered, prefs.targetScreen)
                 if (result.success) {
                     wallpaperHelper.saveCurrentForLiveWallpaper(rendered)
-                    imageHome.setImageBitmap(rendered)
-                    imageLock.setImageBitmap(rendered)
+                    // Do not hand a bitmap to ImageView and then recycle it.
+                    // Reload a bounded preview from disk instead.
+                    if (!rendered.isRecycled) rendered.recycle()
+                    loadCurrentPreview()
+                } else if (!rendered.isRecycled) {
+                    rendered.recycle()
                 }
                 Toast.makeText(this@MainActivity, if (result.success) "Wallpaper applied" else "Failed: ${result.message}", Toast.LENGTH_LONG).show()
+                if (!source.isRecycled) source.recycle()
             } else {
                 wallpaperHelper.openLiveWallpaperPicker()
             }
@@ -437,6 +444,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        previewJob?.cancel()
         uiScope.cancel()
         super.onDestroy()
     }

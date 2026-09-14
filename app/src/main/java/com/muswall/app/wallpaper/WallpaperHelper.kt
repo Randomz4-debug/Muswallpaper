@@ -47,11 +47,13 @@ class WallpaperHelper(private val context: Context) {
         if (prefs.originalBackedUp) return@withContext
         try {
             val drawable = wallpaperManager.drawable
-            val bitmap = (drawable as? android.graphics.drawable.BitmapDrawable)?.bitmap
+            val source = (drawable as? android.graphics.drawable.BitmapDrawable)?.bitmap
+            val bitmap = source?.copy(Bitmap.Config.ARGB_8888, false)
             if (bitmap != null) {
                 FileOutputStream(File(context.filesDir, FILE_ORIGINAL)).use {
                     bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)
                 }
+                if (!bitmap.isRecycled) bitmap.recycle()
                 prefs.originalBackedUp = true
             }
         } catch (e: Exception) {
@@ -115,10 +117,11 @@ class WallpaperHelper(private val context: Context) {
         return@withContext try {
             val bitmap = BitmapFactory.decodeFile(file.absolutePath) ?: return@withContext false
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                wallpaperManager.setBitmap(bitmap, null, true, WallpaperManager.FLAG_SYSTEM)
+                wallpaperManager.setBitmap(bitmap, null, true, WallpaperManager.FLAG_SYSTEM or WallpaperManager.FLAG_LOCK)
             } else {
                 wallpaperManager.setBitmap(bitmap)
             }
+            if (!bitmap.isRecycled) bitmap.recycle()
             true
         } catch (_: Exception) {
             false

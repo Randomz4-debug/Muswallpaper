@@ -54,6 +54,7 @@ class MediaNotificationListenerService : NotificationListenerService() {
         prefs = PreferencesManager.getInstance(this)
         // MusWallApp initializes the application context. Do not start Python here.
         wallpaperHelper = WallpaperHelper(this)
+        PythonBridge.initialize(this)
     }
 
     override fun onListenerConnected() {
@@ -116,41 +117,33 @@ class MediaNotificationListenerService : NotificationListenerService() {
         currentTrackId = id
         if (!prefs.isAutoEnabled || !playing || prefs.wallpaperMode != PreferencesManager.MODE_MUSIC) return
 
-        // Album-art extraction can be expensive on some players. Never do it
-        // directly inside the MediaController callback on the main thread.
         generationJob?.cancel()
         generationJob = scope.launch(Dispatchers.Default) {
+            delay(180)
             val art = extractArtwork(metadata) ?: return@launch
-            queueWallpaper(art)
+            try {
+                renderAndApply(art)
+            } finally {
+                if (!art.isRecycled) art.recycle()
+            }
         }
     }
 
-    private fun queueWallpaper(artwork: Bitmap) {
-        generationJob = scope.launch(Dispatchers.Default) {
-            // Small debounce prevents several media-session callbacks from doing expensive Python work.
-            delay(180)
-            val dm = resources.displayMetrics
-            val targetW = (dm.widthPixels * 0.75f).toInt().coerceIn(480, 900)
-            val targetH = (dm.heightPixels * 0.75f).toInt().coerceIn(960, 1800)
-            val result = PythonBridge.generateWallpaper(
-                artwork,
-                targetW,
-                targetH,
-                prefs.blurRadius.toFloat(),
-                prefs.darkness / 100f,
-                prefs.artScale / 100f,
-                42,
-                true,
-                prefs.effect,
-                prefs.blurType,
-                prefs.coverHeight,
-                prefs.coverOffset,
-                prefs.transitionHeight
-            )
-            if (result == null) {
-                broadcastWallpaperApplied("Could not render artwork")
-                return@launch
-            }
+    private suspend fun renderAndApply(artwork: Bitmap) {
+        val dm = resources.displayMetrics
+        val targetW = (dm.widthPixels * 0.75f).toInt().coerceIn(480, 900)
+        val targetH = (dm.heightPixels * 0.75f).toInt().coerceIn(960, 1800)
+        val result = PythonBridge.generateWallpaper(
+            artwork, targetW, targetH,
+            prefs.blurRadius.toFloat(), prefs.darkness / 100f, prefs.artScale / 100f,
+            42, true, prefs.effect, prefs.blurType,
+            prefs.coverHeight, prefs.coverOffset, prefs.transitionHeight
+        ) ?: run {
+            broadcastWallpaperApplied("Could not render artwork")
+            return
+        }
+
+        try {
             wallpaperHelper.saveCurrentForLiveWallpaper(result)
             if (prefs.liveWallpaperEnabled) {
                 sendBroadcast(Intent(MusicWallpaperService.ACTION_REFRESH).setPackage(packageName))
@@ -161,6 +154,8 @@ class MediaNotificationListenerService : NotificationListenerService() {
                 applied = apply.success
                 broadcastWallpaperApplied(if (apply.success) "Wallpaper updated" else "Failed: ${apply.message ?: "unknown error"}")
             }
+        } finally {
+            if (!result.isRecycled) result.recycle()
         }
     }
 
@@ -186,16 +181,21 @@ class MediaNotificationListenerService : NotificationListenerService() {
 
     private fun downsampleArtwork(bitmap: Bitmap): Bitmap {
         val max = 900
-        if (bitmap.width <= max && bitmap.height <= max) return bitmap
-        val scale = minOf(max.toFloat() / bitmap.width, max.toFloat() / bitmap.height)
-        val w = (bitmap.width * scale).toInt().coerceAtLeast(1)
-        val h = (bitmap.height * scale).toInt().coerceAtLeast(1)
         return try {
-            val smaller = Bitmap.createScaledBitmap(bitmap, w, h, true)
-            if (smaller !== bitmap) bitmap.recycle()
-            smaller
+            val source = if (bitmap.config != Bitmap.Config.ARGB_8888) {
+                bitmap.copy(Bitmap.Config.ARGB_8888, false)
+            } else {
+                bitmap.copy(Bitmap.Config.ARGB_8888, false)
+            } ?: return bitmap
+            if (source.width <= max && source.height <= max) return source
+            val scale = minOf(max.toFloat() / source.width, max.toFloat() / source.height)
+            val w = (source.width * scale).toInt().coerceAtLeast(1)
+            val h = (source.height * scale).toInt().coerceAtLeast(1)
+            Bitmap.createScaledBitmap(source, w, h, true).also {
+                if (it !== source && !source.isRecycled) source.recycle()
+            }
         } catch (_: Throwable) {
-            bitmap
+            try { bitmap.copy(Bitmap.Config.ARGB_8888, false) } catch (_: Throwable) { null }
         }
     }
 

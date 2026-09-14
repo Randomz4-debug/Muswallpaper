@@ -62,8 +62,8 @@ object PythonBridge {
                     true
                 )
             } else srcBitmap
-            source.compress(Bitmap.CompressFormat.JPEG, 84, stream)
-            if (source !== srcBitmap) source.recycle()
+            source.compress(Bitmap.CompressFormat.JPEG, 82, stream)
+            if (source !== srcBitmap && !source.isRecycled) source.recycle()
 
             val result = module.callAttr(
                 "process_wallpaper",
@@ -81,7 +81,7 @@ object PythonBridge {
                 coverOffset.coerceIn(0, 100),
                 transitionHeight.coerceIn(0, 100),
                 "JPEG",
-                84
+                82
             )
             val bytes = result.toJava(ByteArray::class.java)
             BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
