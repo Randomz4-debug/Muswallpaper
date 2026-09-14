@@ -7,10 +7,9 @@ class PreferencesManager private constructor(context: Context) {
 
     companion object {
         @Volatile private var INSTANCE: PreferencesManager? = null
-        fun getInstance(context: Context): PreferencesManager =
-            INSTANCE ?: synchronized(this) {
-                INSTANCE ?: PreferencesManager(context).also { INSTANCE = it }
-            }
+        fun getInstance(context: Context): PreferencesManager = INSTANCE ?: synchronized(this) {
+            INSTANCE ?: PreferencesManager(context).also { INSTANCE = it }
+        }
 
         const val MODE_MUSIC = "music"
         const val MODE_STATIC = "static"
@@ -36,6 +35,15 @@ class PreferencesManager private constructor(context: Context) {
         const val TARGET_HOME = "home"
         const val TARGET_LOCK = "lock"
         const val TARGET_BOTH = "both"
+
+        const val RESOLUTION_DEVICE = "device"
+        const val RESOLUTION_1080P = "1080p"
+        const val RESOLUTION_1440P = "1440p"
+        const val RESOLUTION_4K = "4k"
+        const val RESOLUTION_8K = "8k"
+        const val RESOLUTION_12K = "12k"
+        const val RESOLUTION_16K = "16k"
+        const val RESOLUTION_CUSTOM = "custom"
     }
 
     var isAutoEnabled: Boolean
@@ -157,4 +165,16 @@ class PreferencesManager private constructor(context: Context) {
     var restoreDelay: Int
         get() = sp.getInt("restore_delay", 0)
         set(v) = sp.edit().putInt("restore_delay", v).apply()
+
+    var renderResolution: String
+        get() = sp.getString("render_resolution", RESOLUTION_DEVICE) ?: RESOLUTION_DEVICE
+        set(v) = sp.edit().putString("render_resolution", v).apply()
+
+    var customRenderWidth: Int
+        get() = sp.getInt("render_width", 1080).coerceIn(160, 16384)
+        set(v) = sp.edit().putInt("render_width", v.coerceIn(160, 16384)).apply()
+
+    var customRenderHeight: Int
+        get() = sp.getInt("render_height", 2400).coerceIn(240, 16384)
+        set(v) = sp.edit().putInt("render_height", v.coerceIn(240, 16384)).apply()
 }
