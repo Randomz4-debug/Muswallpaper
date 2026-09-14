@@ -114,7 +114,7 @@ class MusicWallpaperService : WallpaperService() {
 
         private data class VisibleLyric(val line: LyricLine, val active: Boolean)
 
-        private fun currentLyricLines(): List<VisibleLyric> {
+        private fun currentLyricLines(): List<Pair<LyricLine, Boolean>> {
             if (!prefs.showLyrics) return emptyList()
             val raw = prefs.lastLyrics.trim()
             if (raw.isBlank()) return emptyList()
@@ -128,7 +128,7 @@ class MusicWallpaperService : WallpaperService() {
                 val half = maxOf(0, prefs.lyricsLines / 2)
                 val from = (activeIndex - half).coerceAtLeast(0)
                 val to = minOf(synced.size, from + prefs.lyricsLines)
-                return synced.subList(from, to).map { VisibleLyric(it, it === synced[activeIndex]) }
+                return synced.subList(from, to).mapIndexed { i, line -> Pair(line, from + i == activeIndex) }
             }
             val plain = raw.lines().map { it.trim() }.filter { it.isNotBlank() }
             if (plain.isEmpty()) return emptyList()
@@ -137,9 +137,7 @@ class MusicWallpaperService : WallpaperService() {
             val half = maxOf(0, prefs.lyricsLines / 2)
             val from = (activeIndex - half).coerceAtLeast(0)
             val to = minOf(plain.size, from + prefs.lyricsLines)
-            return plain.subList(from, to).mapIndexed { i, text ->
-                VisibleLyric(LyricLine((from + i) * step, text), from + i == activeIndex)
-            }
+            return plain.subList(from, to).mapIndexed { i, text -> Pair(LyricLine((from + i) * step, text), from + i == activeIndex) }
         }
 
         private fun ellipsize(value: String, width: Float): String {
@@ -176,12 +174,12 @@ class MusicWallpaperService : WallpaperService() {
             val lineHeight = baseSize * 1.35f
             val startY = y - ((lines.size - 1) * lineHeight / 2f)
             lines.forEachIndexed { index, item ->
-                val active = item.active
+                val active = item.second
                 textPaint.textSize = if (active) baseSize * 1.08f else baseSize * 0.92f
                 textPaint.alpha = if (active) 255 else 125
                 textPaint.color = parseColor(if (active) prefs.lyricsColor else prefs.lyricsColor2, Color.WHITE)
                 applyTextShader(canvas.width.toFloat(), canvas.height.toFloat())
-                val safe = if (textPaint.measureText(item.line.text) > maxWidth) ellipsize(item.line.text, maxWidth) else item.line.text
+                val safe = if (textPaint.measureText(item.first.text) > maxWidth) ellipsize(item.first.text, maxWidth) else item.first.text
                 val yy = startY + index * lineHeight
                 if (prefs.lyricsShadow || active) {
                     textPaint.setShadowLayer(if (active) 12f else 5f, 0f, 2f, Color.BLACK)
