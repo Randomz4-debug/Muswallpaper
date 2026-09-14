@@ -1,4 +1,4 @@
-# MusWall 1.9.0 update
+# MusWall 1.9.1 update
 
 ## Added
 - Real Android `WallpaperService` live wallpaper.

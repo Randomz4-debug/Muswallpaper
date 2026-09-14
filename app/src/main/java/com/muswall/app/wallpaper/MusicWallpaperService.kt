@@ -31,10 +31,7 @@ class MusicWallpaperService : WallpaperService() {
         private val refreshRunnable = Runnable { draw() }
         private val receiver = object : android.content.BroadcastReceiver() {
             override fun onReceive(context: android.content.Context?, intent: android.content.Intent?) {
-                if (intent?.action == ACTION_REFRESH) {
-                    handler.removeCallbacks(refreshRunnable)
-                    handler.post(refreshRunnable)
-                }
+                if (intent?.action == ACTION_REFRESH) handler.removeCallbacksAndMessages(null).also { draw() }
             }
         }
 

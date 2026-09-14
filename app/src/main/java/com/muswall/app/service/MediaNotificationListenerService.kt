@@ -52,7 +52,6 @@ class MediaNotificationListenerService : NotificationListenerService() {
     override fun onCreate() {
         super.onCreate()
         prefs = PreferencesManager.getInstance(this)
-        PythonBridge.initialize(this)
         wallpaperHelper = WallpaperHelper(this)
     }
 
@@ -146,6 +145,8 @@ class MediaNotificationListenerService : NotificationListenerService() {
                 broadcastWallpaperApplied("Could not render artwork")
                 return@launch
             }
+            // Always capture the user's original wallpaper before MusWall changes it.
+            wallpaperHelper.backupOriginalIfNeeded()
             wallpaperHelper.saveCurrentForLiveWallpaper(result)
             if (prefs.liveWallpaperEnabled) {
                 sendBroadcast(Intent(MusicWallpaperService.ACTION_REFRESH).setPackage(packageName))
@@ -159,14 +160,26 @@ class MediaNotificationListenerService : NotificationListenerService() {
         }
     }
 
+    private fun limitArtworkSize(bitmap: Bitmap, maxSize: Int = 1600): Bitmap {
+        if (bitmap.width <= maxSize && bitmap.height <= maxSize) return bitmap
+        val scale = minOf(maxSize.toFloat() / bitmap.width, maxSize.toFloat() / bitmap.height)
+        val w = (bitmap.width * scale).toInt().coerceAtLeast(1)
+        val h = (bitmap.height * scale).toInt().coerceAtLeast(1)
+        return try {
+            Bitmap.createScaledBitmap(bitmap, w, h, true)
+        } catch (_: Throwable) {
+            bitmap
+        }
+    }
+
     private fun extractArtwork(metadata: MediaMetadata): Bitmap? {
-        metadata.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART)?.let { return it }
-        metadata.getBitmap(MediaMetadata.METADATA_KEY_ART)?.let { return it }
+        metadata.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART)?.let { return limitArtworkSize(it) }
+        metadata.getBitmap(MediaMetadata.METADATA_KEY_ART)?.let { return limitArtworkSize(it) }
         val uriText = metadata.getString(MediaMetadata.METADATA_KEY_ALBUM_ART_URI)
             ?: metadata.getString(MediaMetadata.METADATA_KEY_ART_URI)
         if (!uriText.isNullOrBlank()) {
             return try {
-                contentResolver.openInputStream(Uri.parse(uriText)).use { BitmapFactory.decodeStream(it) }
+                contentResolver.openInputStream(Uri.parse(uriText)).use { input -> BitmapFactory.decodeStream(input)?.let { limitArtworkSize(it) } }
             } catch (_: Exception) { null }
         }
         return null

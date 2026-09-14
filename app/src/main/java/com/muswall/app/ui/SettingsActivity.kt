@@ -19,7 +19,20 @@ class SettingsActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         prefs = PreferencesManager.getInstance(this)
-        setContentView(R.layout.activity_settings)
+        try {
+            setContentView(R.layout.activity_settings)
+        } catch (t: Throwable) {
+            android.util.Log.e("MusWall", "Settings UI failed to inflate", t)
+            val root = android.widget.LinearLayout(this).apply {
+                orientation = android.widget.LinearLayout.VERTICAL
+                setPadding(32, 48, 32, 32)
+            }
+            root.addView(TextView(this).apply { text = "Settings"; textSize = 30f })
+            root.addView(TextView(this).apply { text = "Some settings could not be loaded. The main wallpaper service is still available."; textSize = 16f; setPadding(0, 24, 0, 24) })
+            root.addView(android.widget.Button(this).apply { text = "Back"; setOnClickListener { finish() } })
+            setContentView(root)
+            return
+        }
 
         findViewById<TextView>(R.id.back).setOnClickListener { finish() }
         findViewById<TextView>(R.id.themeRow).setOnClickListener { chooseTheme() }
@@ -78,7 +91,10 @@ class SettingsActivity : AppCompatActivity() {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == 2001 && resultCode == RESULT_OK && data?.data != null) {
-            prefs.staticWallpaperUri = data.data.toString()
+            val uri = data.data!!
+            try { contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) } catch (_: Exception) {}
+            prefs.staticWallpaperUri = uri.toString()
+            ToastCompat.show(this, "Restore wallpaper selected")
         }
     }
 

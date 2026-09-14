@@ -10,6 +10,8 @@ import android.os.Bundle
 import android.provider.Settings
 import android.text.TextUtils
 import android.view.View
+import android.widget.LinearLayout
+import android.widget.Button
 import android.widget.ImageView
 import android.widget.PopupMenu
 import android.widget.Toast
@@ -36,6 +38,7 @@ class MainActivity : AppCompatActivity() {
     private val uiScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var selectedUri: Uri? = null
     private var previewJob: Job? = null
+    private var uiReady = false
 
     private lateinit var imageHome: ImageView
     private lateinit var imageLock: ImageView
@@ -74,24 +77,67 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_main)
-        prefs = PreferencesManager.getInstance(this)
-        com.muswall.app.python.PythonBridge.initialize(this)
-        wallpaperHelper = WallpaperHelper(this)
 
-        imageHome = findViewById(R.id.imageHomePreview)
-        imageLock = findViewById(R.id.imageLockPreview)
-        textTrack = findViewById(R.id.textTrack)
-        textArtist = findViewById(R.id.textArtist)
-        textStatus = findViewById(R.id.textServiceStatus)
-        permissionText = findViewById(R.id.textPermissionStatus)
+        // Never let an optional UI component or a damaged cached image take down
+        // the whole application. A small fallback screen keeps the app usable.
+        try {
+            setContentView(R.layout.activity_main)
+            prefs = PreferencesManager.getInstance(this)
+            com.muswall.app.python.PythonBridge.initialize(this)
+            wallpaperHelper = WallpaperHelper(this)
 
-        setupModes()
-        setupEffects()
-        setupSliders()
-        setupActions()
-        restoreUi()
-        loadCurrentPreview()
+            imageHome = findViewById(R.id.imageHomePreview)
+            imageLock = findViewById(R.id.imageLockPreview)
+            textTrack = findViewById(R.id.textTrack)
+            textArtist = findViewById(R.id.textArtist)
+            textStatus = findViewById(R.id.textServiceStatus)
+            permissionText = findViewById(R.id.textPermissionStatus)
+
+            setupModes()
+            setupEffects()
+            setupSliders()
+            setupActions()
+            restoreUi()
+            restoreSelectedImage()
+            loadCurrentPreview()
+            uiReady = true
+        } catch (t: Throwable) {
+            android.util.Log.e("MusWall", "MainActivity startup failed", t)
+            showFallbackScreen()
+        }
+    }
+
+    private fun showFallbackScreen() {
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(32, 48, 32, 32)
+            setBackgroundColor(android.graphics.Color.rgb(248, 250, 243))
+        }
+        val title = android.widget.TextView(this).apply {
+            text = "MusWall"
+            textSize = 32f
+            setTextColor(android.graphics.Color.rgb(32, 36, 30))
+        }
+        val message = android.widget.TextView(this).apply {
+            text = "MusWall could not load one of its optional screens.\nYour wallpapers and settings are safe."
+            textSize = 16f
+            setPadding(0, 24, 0, 24)
+        }
+        val retry = Button(this).apply {
+            text = "Retry"
+            setOnClickListener { recreate() }
+        }
+        root.addView(title, LinearLayout.LayoutParams(-1, -2))
+        root.addView(message, LinearLayout.LayoutParams(-1, -2))
+        root.addView(retry, LinearLayout.LayoutParams(-1, -2))
+        setContentView(root)
+    }
+
+    private fun restoreSelectedImage() {
+        val saved = prefs.staticWallpaperUri
+        if (saved.isBlank()) return
+        runCatching { selectedUri = Uri.parse(saved) }
+        selectedUri?.let { loadPreviewFromUri(it) }
     }
 
     private fun setupModes() {
@@ -221,27 +267,83 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun decodeSampled(file: File, maxWidth: Int = 720, maxHeight: Int = 1280): android.graphics.Bitmap? {
+        return try {
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(file.absolutePath, bounds)
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+            var sample = 1
+            while (bounds.outWidth / sample > maxWidth || bounds.outHeight / sample > maxHeight) sample *= 2
+            val opts = BitmapFactory.Options().apply {
+                inSampleSize = sample
+                inPreferredConfig = android.graphics.Bitmap.Config.RGB_565
+            }
+            BitmapFactory.decodeFile(file.absolutePath, opts)
+        } catch (t: Throwable) {
+            android.util.Log.w("MusWall", "Image decode failed", t)
+            null
+        }
+    }
+
     private fun loadCurrentPreview() {
         val file = File(filesDir, WallpaperHelper.FILE_CURRENT)
         if (!file.exists()) return
-        val bitmap = BitmapFactory.decodeFile(file.absolutePath) ?: return
+        val bitmap = decodeSampled(file) ?: return
         imageHome.setImageBitmap(bitmap)
         imageLock.setImageBitmap(bitmap)
     }
 
     private fun loadPreviewFromUri(uri: Uri) {
-        try {
-            val bitmap = contentResolver.openInputStream(uri).use { BitmapFactory.decodeStream(it) } ?: return
-            imageHome.setImageBitmap(bitmap)
-            imageLock.setImageBitmap(bitmap)
-        } catch (_: Exception) {}
+        uiScope.launch(Dispatchers.IO) {
+            val bitmap = try {
+                contentResolver.openInputStream(uri)?.use { input ->
+                    val bytes = input.readBytes()
+                    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+                    var sample = 1
+                    while (bounds.outWidth / sample > 720 || bounds.outHeight / sample > 1280) sample *= 2
+                    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply {
+                        inSampleSize = sample
+                        inPreferredConfig = android.graphics.Bitmap.Config.RGB_565
+                    })
+                }
+            } catch (t: Throwable) {
+                android.util.Log.w("MusWall", "URI preview failed", t)
+                null
+            }
+            withContext(Dispatchers.Main) {
+                if (bitmap != null && !isFinishing && !isDestroyed) {
+                    imageHome.setImageBitmap(bitmap)
+                    imageLock.setImageBitmap(bitmap)
+                }
+            }
+        }
+    }
+
+    private fun decodeUriForRender(uri: Uri): android.graphics.Bitmap? {
+        return try {
+            contentResolver.openInputStream(uri)?.use { input ->
+                val bytes = input.readBytes()
+                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+                var sample = 1
+                while (bounds.outWidth / sample > 1600 || bounds.outHeight / sample > 1600) sample *= 2
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply {
+                    inSampleSize = sample
+                    inPreferredConfig = android.graphics.Bitmap.Config.ARGB_8888
+                })
+            }
+        } catch (t: Throwable) {
+            android.util.Log.w("MusWall", "Render image decode failed", t)
+            null
+        }
     }
 
     private fun applyCurrent() {
         uiScope.launch {
             val source = when {
-                selectedUri != null -> runCatching { contentResolver.openInputStream(selectedUri!!).use { BitmapFactory.decodeStream(it) } }.getOrNull()
-                File(filesDir, WallpaperHelper.FILE_CURRENT).exists() -> BitmapFactory.decodeFile(File(filesDir, WallpaperHelper.FILE_CURRENT).absolutePath)
+                selectedUri != null -> decodeUriForRender(selectedUri!!)
+                File(filesDir, WallpaperHelper.FILE_CURRENT).exists() -> decodeSampled(File(filesDir, WallpaperHelper.FILE_CURRENT), 1600, 1600)
                 else -> null
             }
             if (source == null) {
@@ -328,18 +430,22 @@ class MainActivity : AppCompatActivity() {
 
     override fun onStart() {
         super.onStart()
-        val filter = IntentFilter().apply {
-            addAction(MediaNotificationListenerService.ACTION_TRACK_CHANGED)
-            addAction(MediaNotificationListenerService.ACTION_PLAYBACK_STATE_CHANGED)
-            addAction(MediaNotificationListenerService.ACTION_WALLPAPER_APPLIED)
-            addAction(MusicWallpaperService.ACTION_REFRESH)
+        if (!uiReady) return
+        try {
+            val filter = IntentFilter().apply {
+                addAction(MediaNotificationListenerService.ACTION_TRACK_CHANGED)
+                addAction(MediaNotificationListenerService.ACTION_PLAYBACK_STATE_CHANGED)
+                addAction(MediaNotificationListenerService.ACTION_WALLPAPER_APPLIED)
+            }
+            ContextCompat.registerReceiver(this, statusReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
+        } catch (t: Throwable) {
+            android.util.Log.w("MusWall", "Receiver registration failed", t)
         }
-        ContextCompat.registerReceiver(this, statusReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
     }
 
     override fun onResume() {
         super.onResume()
-        restoreUi()
+        if (uiReady) restoreUi()
     }
 
     override fun onStop() {

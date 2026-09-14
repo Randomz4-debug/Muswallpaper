@@ -1,26 +1,183 @@
 <?xml version="1.0" encoding="utf-8"?>
-<ScrollView xmlns:android="http://schemas.android.com/apk/res/android" android:layout_width="match_parent" android:layout_height="match_parent" android:background="#F8FAF3">
-    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:padding="26dp">
-        <TextView android:id="@+id/back" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="‹  Settings" android:textSize="31sp" android:textColor="#20241E" android:paddingBottom="18dp"/>
-        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="MusWall PRO" android:textSize="22sp" android:textColor="#3F6D40" android:padding="18dp" android:background="#BCEFAE"/>
-        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Appearance" android:textSize="18sp" android:textColor="#4B7048" android:layout_marginTop="24dp"/>
-        <TextView android:id="@+id/themeRow" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="🎨  Theme\n      Follow System" android:textSize="17sp" android:padding="20dp"/>
-        <TextView android:id="@+id/languageRow" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="🌐  Language\n      System Default" android:textSize="17sp" android:padding="20dp"/>
-        <TextView android:id="@+id/widgetRow" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="▦  Widget Settings\n      Customize widget background" android:textSize="17sp" android:padding="20dp"/>
-        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Auto-Switch with Music" android:textSize="18sp" android:textColor="#4B7048" android:layout_marginTop="20dp"/>
-        <TextView android:id="@+id/restoreRow" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="▧  Restore wallpaper\n      Select the wallpaper shown when music stops" android:textSize="17sp" android:padding="20dp"/>
-        <TextView android:id="@+id/timingRow" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="◷  Restore timing\n      When music is paused" android:textSize="17sp" android:padding="20dp"/>
-        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center_vertical" android:padding="12dp">
-            <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="Apply effects to Restore\nApply the same effects to the restore wallpaper" android:textSize="16sp"/>
-            <com.google.android.material.materialswitch.MaterialSwitch android:id="@+id/effectsRestore" android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#F8FAF3"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="26dp">
+
+        <TextView
+            android:id="@+id/back"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="‹  Settings"
+            android:textColor="#20241E"
+            android:textSize="31sp"
+            android:paddingBottom="18dp" />
+
+        <TextView
+            android:id="@+id/proCard"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="#BCEFAE"
+            android:padding="18dp"
+            android:text="MusWall PRO — Upgrade | Unlock all features, ad-free experience"
+            android:textColor="#3F6D40"
+            android:textSize="18sp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
+            android:text="Appearance"
+            android:textColor="#4B7048"
+            android:textSize="18sp" />
+
+        <TextView
+            android:id="@+id/themeRow"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:padding="20dp"
+            android:text="Theme — Follow System"
+            android:textColor="#20241E"
+            android:textSize="17sp" />
+
+        <TextView
+            android:id="@+id/languageRow"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:padding="20dp"
+            android:text="Language — System Default"
+            android:textColor="#20241E"
+            android:textSize="17sp" />
+
+        <TextView
+            android:id="@+id/widgetRow"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:padding="20dp"
+            android:text="Widget Settings — Customize widget background"
+            android:textColor="#20241E"
+            android:textSize="17sp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:text="Auto-Switch with Music"
+            android:textColor="#4B7048"
+            android:textSize="18sp" />
+
+        <TextView
+            android:id="@+id/restoreRow"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:padding="20dp"
+            android:text="Restore wallpaper — Select the wallpaper shown when music stops"
+            android:textColor="#20241E"
+            android:textSize="17sp" />
+
+        <TextView
+            android:id="@+id/timingRow"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:padding="20dp"
+            android:text="Restore timing — When music is paused"
+            android:textColor="#20241E"
+            android:textSize="17sp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:padding="12dp">
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Apply effects to Restore — Apply the same effects to the Restore Wallpaper"
+                android:textColor="#20241E"
+                android:textSize="16sp" />
+            <com.google.android.material.materialswitch.MaterialSwitch
+                android:id="@+id/effectsRestore"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content" />
         </LinearLayout>
-        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Music Wallpaper Service" android:textSize="18sp" android:textColor="#4B7048" android:layout_marginTop="20dp"/>
-        <TextView android:id="@+id/permissionsRow" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="▣  Check Permissions\n      Notification and device permissions" android:textSize="17sp" android:padding="20dp"/>
-        <TextView android:id="@+id/serviceRow" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="♫  Music Wallpaper service\n      Re-enable music detection" android:textSize="17sp" android:padding="20dp"/>
-        <TextView android:id="@+id/compatibilityRow" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="◴  Compatibility Mode\n      Switch wallpaper instantly when music changes" android:textSize="17sp" android:padding="20dp"/>
-        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Feedback" android:textSize="18sp" android:textColor="#4B7048" android:layout_marginTop="20dp"/>
-        <TextView android:id="@+id/feedbackRow" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="✉  Send Feedback\n      We value your suggestions" android:textSize="17sp" android:padding="20dp"/>
-        <TextView android:id="@+id/faqRow" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="FAQ\n      Frequently asked questions" android:textSize="17sp" android:padding="20dp"/>
-        <TextView android:id="@+id/updateRow" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="⟳  Check for Updates\n      Version 1.9.0" android:textSize="17sp" android:padding="20dp"/>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:text="Music Wallpaper Service"
+            android:textColor="#4B7048"
+            android:textSize="18sp" />
+
+        <TextView
+            android:id="@+id/permissionsRow"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:padding="20dp"
+            android:text="Check Permissions — Notification and device permissions"
+            android:textColor="#20241E"
+            android:textSize="17sp" />
+
+        <TextView
+            android:id="@+id/serviceRow"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:padding="20dp"
+            android:text="Music Wallpaper service — Re-enable music detection"
+            android:textColor="#20241E"
+            android:textSize="17sp" />
+
+        <TextView
+            android:id="@+id/compatibilityRow"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:padding="20dp"
+            android:text="Compatibility Mode — Switch wallpaper instantly when music changes"
+            android:textColor="#20241E"
+            android:textSize="17sp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:text="Feedback"
+            android:textColor="#4B7048"
+            android:textSize="18sp" />
+
+        <TextView
+            android:id="@+id/feedbackRow"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:padding="20dp"
+            android:text="Send Feedback — We value your suggestions"
+            android:textColor="#20241E"
+            android:textSize="17sp" />
+
+        <TextView
+            android:id="@+id/faqRow"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:padding="20dp"
+            android:text="FAQ — Frequently asked questions"
+            android:textColor="#20241E"
+            android:textSize="17sp" />
+
+        <TextView
+            android:id="@+id/updateRow"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:padding="20dp"
+            android:text="Check for Updates — Version 1.9.1"
+            android:textColor="#20241E"
+            android:textSize="17sp" />
+
     </LinearLayout>
 </ScrollView>
