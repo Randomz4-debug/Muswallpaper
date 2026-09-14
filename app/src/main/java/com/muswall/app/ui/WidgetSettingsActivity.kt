@@ -1,6 +1,8 @@
 package com.muswall.app.ui
 
 import android.app.Activity
+import android.appwidget.AppWidgetManager
+import android.content.Intent
 import android.os.Bundle
 import android.widget.EditText
 import android.widget.SeekBar
@@ -13,11 +15,15 @@ import com.muswall.app.service.MediaNotificationListenerService
 
 class WidgetSettingsActivity : AppCompatActivity() {
     private lateinit var prefs: PreferencesManager
+    private var appWidgetId = AppWidgetManager.INVALID_APPWIDGET_ID
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         prefs = PreferencesManager.getInstance(this)
+        appWidgetId = intent?.getIntExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, AppWidgetManager.INVALID_APPWIDGET_ID) ?: AppWidgetManager.INVALID_APPWIDGET_ID
+        setResult(Activity.RESULT_CANCELED, Intent().putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId))
         setContentView(R.layout.activity_widget_settings)
+        findViewById<TextView>(R.id.widgetBack).setOnClickListener { finish() }
         bindSwitch(R.id.widgetArtworkSwitch, prefs.widgetShowArtwork) { prefs.widgetShowArtwork = it }
         bindSwitch(R.id.widgetTitleSwitch, prefs.widgetShowTitle) { prefs.widgetShowTitle = it }
         bindSwitch(R.id.widgetArtistSwitch, prefs.widgetShowArtist) { prefs.widgetShowArtist = it }
@@ -42,8 +48,8 @@ class WidgetSettingsActivity : AppCompatActivity() {
             prefs.widgetSecondaryColor = findViewById<EditText>(R.id.widgetSecondaryColor).text.toString().ifBlank { "#C7C7D0" }
             prefs.widgetBackgroundColor = findViewById<EditText>(R.id.widgetBackgroundColor).text.toString().ifBlank { "#17151F" }
             prefs.widgetCustomTimeLabel = findViewById<EditText>(R.id.widgetTimeLabel).text.toString().ifBlank { "Now Playing" }
-            sendBroadcast(android.content.Intent(MediaNotificationListenerService.ACTION_SETTINGS_CHANGED).setPackage(packageName))
-            setResult(Activity.RESULT_OK)
+            sendBroadcast(Intent(MediaNotificationListenerService.ACTION_SETTINGS_CHANGED).setPackage(packageName))
+            setResult(Activity.RESULT_OK, Intent().putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId))
             finish()
         }
     }
