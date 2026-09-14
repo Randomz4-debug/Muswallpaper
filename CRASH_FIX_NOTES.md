@@ -1,21 +1,13 @@
-# MusWall 1.9.1 — crash/performance repair
+# MusWall 1.9.2 crash/performance fix
 
-This build keeps the full MusWall-style UI and live-wallpaper features while fixing the main failure paths found during review.
-
-## Fixes
-- Removed eager Chaquopy/Python startup from `Application.onCreate()`.
-- Python now starts only when rendering is actually needed.
-- Added a protected startup path in `MainActivity` so a UI component/inflation problem cannot create a crash loop.
-- Added a minimal fallback screen with Retry.
-- Prevented lifecycle callbacks from touching uninitialized views.
-- Rewrote Settings XML to avoid the AAPT `attr/FAQ... not found` resource-linking failure.
-- Added safe/sampled image decoding to reduce RAM usage and freezes.
-- Limited incoming album artwork to 1600px before rendering.
-- Debounced media callbacks and kept live wallpaper redraw event-driven.
-- Back up the original wallpaper before applying a generated wallpaper, including live-wallpaper mode.
-- Live wallpaper remains a real Android `WallpaperService` and redraws only when artwork changes.
-- Bumped version to 1.9.1 / versionCode 3.
-
-## Build
-GitHub Actions provisions Gradle 8.4 directly, so the workflow does not depend on a missing wrapper JAR.
-Pillow is pinned to 11.0.0 because Chaquopy provides Android wheels for this setup.
+- Removed the whole-activity fallback path which hid the real MusWall UI whenever one optional control threw during startup.
+- MainActivity now loads the full UI first and initializes modes, effects, sliders, actions, state, and preview independently.
+- Slider preferences are clamped to the XML slider ranges so old/corrupt preferences cannot crash launch.
+- Persisted static wallpaper URI is restored safely.
+- Python remains lazy: the Application stores only the application context; Python starts only when rendering is requested.
+- MediaNotificationListenerService no longer initializes Python itself.
+- Media metadata artwork extraction is moved off the main callback path and album art is bounded to reduce memory spikes and UI lag.
+- PythonBridge bounds render inputs and logs failures instead of crashing the UI.
+- Live wallpaper rendering runs on a dedicated HandlerThread and refreshes only when artwork changes.
+- Live wallpaper bitmap decoding uses RGB_565 and is released after drawing.
+- Version 1.9.2 / versionCode 4.

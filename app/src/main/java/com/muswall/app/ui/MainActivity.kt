@@ -78,66 +78,48 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Never let an optional UI component or a damaged cached image take down
-        // the whole application. A small fallback screen keeps the app usable.
-        try {
-            setContentView(R.layout.activity_main)
-            prefs = PreferencesManager.getInstance(this)
-            com.muswall.app.python.PythonBridge.initialize(this)
-            wallpaperHelper = WallpaperHelper(this)
+        // The main UI must never be replaced by a generic fallback because one
+        // optional control failed. Load the screen first, then initialize each
+        // feature independently so one bad preference/control cannot break launch.
+        setContentView(R.layout.activity_main)
 
-            imageHome = findViewById(R.id.imageHomePreview)
-            imageLock = findViewById(R.id.imageLockPreview)
-            textTrack = findViewById(R.id.textTrack)
-            textArtist = findViewById(R.id.textArtist)
-            textStatus = findViewById(R.id.textServiceStatus)
-            permissionText = findViewById(R.id.textPermissionStatus)
+        prefs = PreferencesManager.getInstance(this)
+        wallpaperHelper = WallpaperHelper(this)
 
-            setupModes()
-            setupEffects()
-            setupSliders()
-            setupActions()
+        imageHome = findViewById(R.id.imageHomePreview)
+        imageLock = findViewById(R.id.imageLockPreview)
+        textTrack = findViewById(R.id.textTrack)
+        textArtist = findViewById(R.id.textArtist)
+        textStatus = findViewById(R.id.textServiceStatus)
+        permissionText = findViewById(R.id.textPermissionStatus)
+        uiReady = true
+
+        safeUiInit("modes") { setupModes() }
+        safeUiInit("effects") { setupEffects() }
+        safeUiInit("sliders") { setupSliders() }
+        safeUiInit("actions") { setupActions() }
+        safeUiInit("state") {
+            if (prefs.staticWallpaperUri.isNotBlank()) {
+                selectedUri = runCatching { Uri.parse(prefs.staticWallpaperUri) }.getOrNull()
+            }
             restoreUi()
-            restoreSelectedImage()
-            loadCurrentPreview()
-            uiReady = true
+        }
+        safeUiInit("preview") {
+            if (prefs.wallpaperMode == PreferencesManager.MODE_STATIC && selectedUri != null) {
+                loadPreviewFromUri(selectedUri!!)
+            } else {
+                loadCurrentPreview()
+            }
+        }
+    }
+
+    private fun safeUiInit(name: String, block: () -> Unit) {
+        try {
+            block()
         } catch (t: Throwable) {
-            android.util.Log.e("MusWall", "MainActivity startup failed", t)
-            showFallbackScreen()
+            android.util.Log.e("MusWall", "Optional UI component failed: $name", t)
+            Toast.makeText(this, "Some $name controls are unavailable, but MusWall is still running.", Toast.LENGTH_SHORT).show()
         }
-    }
-
-    private fun showFallbackScreen() {
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(32, 48, 32, 32)
-            setBackgroundColor(android.graphics.Color.rgb(248, 250, 243))
-        }
-        val title = android.widget.TextView(this).apply {
-            text = "MusWall"
-            textSize = 32f
-            setTextColor(android.graphics.Color.rgb(32, 36, 30))
-        }
-        val message = android.widget.TextView(this).apply {
-            text = "MusWall could not load one of its optional screens.\nYour wallpapers and settings are safe."
-            textSize = 16f
-            setPadding(0, 24, 0, 24)
-        }
-        val retry = Button(this).apply {
-            text = "Retry"
-            setOnClickListener { recreate() }
-        }
-        root.addView(title, LinearLayout.LayoutParams(-1, -2))
-        root.addView(message, LinearLayout.LayoutParams(-1, -2))
-        root.addView(retry, LinearLayout.LayoutParams(-1, -2))
-        setContentView(root)
-    }
-
-    private fun restoreSelectedImage() {
-        val saved = prefs.staticWallpaperUri
-        if (saved.isBlank()) return
-        runCatching { selectedUri = Uri.parse(saved) }
-        selectedUri?.let { loadPreviewFromUri(it) }
     }
 
     private fun setupModes() {
@@ -205,14 +187,15 @@ class MainActivity : AppCompatActivity() {
     private fun bindSlider(sliderId: Int, labelId: Int, name: String, save: (Int) -> Unit) {
         val slider = findViewById<Slider>(sliderId)
         val label = findViewById<TextView>(labelId)
-        slider.value = when (sliderId) {
-            R.id.sliderBlur -> prefs.blurRadius.toFloat()
-            R.id.sliderCoverHeight -> prefs.coverHeight.toFloat()
-            R.id.sliderCoverOffset -> prefs.coverOffset.toFloat()
-            R.id.sliderTransition -> prefs.transitionHeight.toFloat()
-            R.id.sliderDarkness -> prefs.darkness.toFloat()
-            else -> prefs.artScale.toFloat()
+        val savedValue = when (sliderId) {
+            R.id.sliderBlur -> prefs.blurRadius
+            R.id.sliderCoverHeight -> prefs.coverHeight
+            R.id.sliderCoverOffset -> prefs.coverOffset
+            R.id.sliderTransition -> prefs.transitionHeight
+            R.id.sliderDarkness -> prefs.darkness
+            else -> prefs.artScale
         }
+        slider.value = savedValue.toFloat().coerceIn(slider.valueFrom, slider.valueTo)
         label.text = "$name   ${slider.value.toInt()}"
         slider.addOnChangeListener { _, value, _ ->
             val n = value.toInt()

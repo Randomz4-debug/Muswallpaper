@@ -52,6 +52,7 @@ class MediaNotificationListenerService : NotificationListenerService() {
     override fun onCreate() {
         super.onCreate()
         prefs = PreferencesManager.getInstance(this)
+        // MusWallApp initializes the application context. Do not start Python here.
         wallpaperHelper = WallpaperHelper(this)
     }
 
@@ -114,13 +115,18 @@ class MediaNotificationListenerService : NotificationListenerService() {
         if (id == currentTrackId) return
         currentTrackId = id
         if (!prefs.isAutoEnabled || !playing || prefs.wallpaperMode != PreferencesManager.MODE_MUSIC) return
-        val art = extractArtwork(metadata) ?: return
-        queueWallpaper(art)
+
+        // Album-art extraction can be expensive on some players. Never do it
+        // directly inside the MediaController callback on the main thread.
+        generationJob?.cancel()
+        generationJob = scope.launch(Dispatchers.Default) {
+            val art = extractArtwork(metadata) ?: return@launch
+            queueWallpaper(art)
+        }
     }
 
     private fun queueWallpaper(artwork: Bitmap) {
-        generationJob?.cancel()
-        generationJob = scope.launch {
+        generationJob = scope.launch(Dispatchers.Default) {
             // Small debounce prevents several media-session callbacks from doing expensive Python work.
             delay(180)
             val dm = resources.displayMetrics
@@ -145,8 +151,6 @@ class MediaNotificationListenerService : NotificationListenerService() {
                 broadcastWallpaperApplied("Could not render artwork")
                 return@launch
             }
-            // Always capture the user's original wallpaper before MusWall changes it.
-            wallpaperHelper.backupOriginalIfNeeded()
             wallpaperHelper.saveCurrentForLiveWallpaper(result)
             if (prefs.liveWallpaperEnabled) {
                 sendBroadcast(Intent(MusicWallpaperService.ACTION_REFRESH).setPackage(packageName))
@@ -160,29 +164,39 @@ class MediaNotificationListenerService : NotificationListenerService() {
         }
     }
 
-    private fun limitArtworkSize(bitmap: Bitmap, maxSize: Int = 1600): Bitmap {
-        if (bitmap.width <= maxSize && bitmap.height <= maxSize) return bitmap
-        val scale = minOf(maxSize.toFloat() / bitmap.width, maxSize.toFloat() / bitmap.height)
-        val w = (bitmap.width * scale).toInt().coerceAtLeast(1)
-        val h = (bitmap.height * scale).toInt().coerceAtLeast(1)
-        return try {
-            Bitmap.createScaledBitmap(bitmap, w, h, true)
-        } catch (_: Throwable) {
-            bitmap
-        }
-    }
-
     private fun extractArtwork(metadata: MediaMetadata): Bitmap? {
-        metadata.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART)?.let { return limitArtworkSize(it) }
-        metadata.getBitmap(MediaMetadata.METADATA_KEY_ART)?.let { return limitArtworkSize(it) }
+        // Media callbacks may contain very large album-art bitmaps. Copying a
+        // bounded bitmap here prevents memory spikes on low-RAM devices.
+        metadata.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART)?.let { return downsampleArtwork(it) }
+        metadata.getBitmap(MediaMetadata.METADATA_KEY_ART)?.let { return downsampleArtwork(it) }
         val uriText = metadata.getString(MediaMetadata.METADATA_KEY_ALBUM_ART_URI)
             ?: metadata.getString(MediaMetadata.METADATA_KEY_ART_URI)
         if (!uriText.isNullOrBlank()) {
             return try {
-                contentResolver.openInputStream(Uri.parse(uriText)).use { input -> BitmapFactory.decodeStream(input)?.let { limitArtworkSize(it) } }
+                contentResolver.openInputStream(Uri.parse(uriText)).use {
+                    val opts = BitmapFactory.Options().apply {
+                        inPreferredConfig = Bitmap.Config.RGB_565
+                    }
+                    BitmapFactory.decodeStream(it, null, opts)?.let { bmp -> downsampleArtwork(bmp) }
+                }
             } catch (_: Exception) { null }
         }
         return null
+    }
+
+    private fun downsampleArtwork(bitmap: Bitmap): Bitmap {
+        val max = 900
+        if (bitmap.width <= max && bitmap.height <= max) return bitmap
+        val scale = minOf(max.toFloat() / bitmap.width, max.toFloat() / bitmap.height)
+        val w = (bitmap.width * scale).toInt().coerceAtLeast(1)
+        val h = (bitmap.height * scale).toInt().coerceAtLeast(1)
+        return try {
+            val smaller = Bitmap.createScaledBitmap(bitmap, w, h, true)
+            if (smaller !== bitmap) bitmap.recycle()
+            smaller
+        } catch (_: Throwable) {
+            bitmap
+        }
     }
 
     private fun broadcastTrack(title: String, artist: String) {
