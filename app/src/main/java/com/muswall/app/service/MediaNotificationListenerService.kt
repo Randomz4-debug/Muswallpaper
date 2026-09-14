@@ -16,7 +16,9 @@ import com.muswall.app.python.PythonBridge
 import com.muswall.app.wallpaper.MusicWallpaperService
 import com.muswall.app.wallpaper.WallpaperHelper
 import kotlinx.coroutines.*
+import java.util.concurrent.atomic.AtomicLong
 
+/** Callback-driven music detection. No polling is used. */
 class MediaNotificationListenerService : NotificationListenerService() {
     companion object {
         const val ACTION_TRACK_CHANGED = "com.muswall.app.ACTION_TRACK_CHANGED"
@@ -29,24 +31,32 @@ class MediaNotificationListenerService : NotificationListenerService() {
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private val generation = AtomicLong(0L)
     private lateinit var prefs: PreferencesManager
     private lateinit var wallpaperHelper: WallpaperHelper
     private var sessionManager: MediaSessionManager? = null
     private var activeController: MediaController? = null
     private var currentTrackId = ""
     private var playing = false
-    private var applied = false
     private var generationJob: Job? = null
 
     private val callback = object : MediaController.Callback() {
-        override fun onPlaybackStateChanged(state: PlaybackState?) = handlePlayback(state)
-        override fun onMetadataChanged(metadata: MediaMetadata?) = handleMetadata(metadata)
+        override fun onPlaybackStateChanged(state: PlaybackState?) {
+            handlePlayback(state)
+        }
+
+        override fun onMetadataChanged(metadata: MediaMetadata?) {
+            handleMetadata(metadata, force = true)
+        }
+
+        override fun onSessionDestroyed() {
+            handlePlayback(null)
+            refreshActiveSessions()
+        }
     }
 
     private val sessionsListener = MediaSessionManager.OnActiveSessionsChangedListener { controllers ->
-        val best = controllers?.firstOrNull { it.playbackState?.state == PlaybackState.STATE_PLAYING }
-            ?: controllers?.firstOrNull()
-        switchController(best)
+        selectBestController(controllers)
     }
 
     override fun onCreate() {
@@ -66,31 +76,53 @@ class MediaNotificationListenerService : NotificationListenerService() {
             sessionManager = getSystemService(Context.MEDIA_SESSION_SERVICE) as MediaSessionManager
             val component = ComponentName(this, MediaNotificationListenerService::class.java)
             sessionManager?.addOnActiveSessionsChangedListener(sessionsListener, component)
-            val controllers = sessionManager?.getActiveSessions(component)
-            switchController(controllers?.firstOrNull { it.playbackState?.state == PlaybackState.STATE_PLAYING } ?: controllers?.firstOrNull())
-        } catch (_: SecurityException) {
-            broadcastWallpaperApplied("Media access is not connected. Re-enable Notification access.")
-        } catch (_: Exception) {
+            refreshActiveSessions()
+        } catch (t: Throwable) {
+            android.util.Log.w("MusWallMedia", "Media session connection failed", t)
+            broadcastWallpaperApplied("Music detection is not connected. Enable Notification access.")
         }
+    }
+
+    private fun refreshActiveSessions() {
+        try {
+            val component = ComponentName(this, MediaNotificationListenerService::class.java)
+            selectBestController(sessionManager?.getActiveSessions(component))
+        } catch (t: Throwable) {
+            android.util.Log.w("MusWallMedia", "Active session refresh failed", t)
+        }
+    }
+
+    private fun selectBestController(controllers: List<MediaController>?) {
+        val list = controllers.orEmpty()
+        val best = list.firstOrNull { it.playbackState?.state == PlaybackState.STATE_PLAYING }
+            ?: list.firstOrNull { it.metadata != null }
+            ?: list.firstOrNull()
+        switchController(best)
     }
 
     private fun switchController(controller: MediaController?) {
         if (controller?.sessionToken == activeController?.sessionToken) {
-            controller?.metadata?.let { handleMetadata(it) }
             controller?.playbackState?.let { handlePlayback(it) }
+            controller?.metadata?.let { handleMetadata(it, force = true) }
+            if (controller == null) handlePlayback(null)
             return
         }
+
         try { activeController?.unregisterCallback(callback) } catch (_: Throwable) {}
         activeController = controller
-        try { controller?.registerCallback(callback) } catch (t: Throwable) {
-            android.util.Log.w("MusWallMedia", "Controller callback failed", t)
+        currentTrackId = ""
+
+        if (controller == null) {
+            handlePlayback(null)
+            broadcastTrack("No music detected", "Waiting for a music player")
+            return
         }
-        try { handlePlayback(controller?.playbackState) } catch (t: Throwable) {
-            android.util.Log.w("MusWallMedia", "Playback state failed", t)
+
+        try { controller.registerCallback(callback) } catch (t: Throwable) {
+            android.util.Log.w("MusWallMedia", "Controller callback registration failed", t)
         }
-        try { handleMetadata(controller?.metadata, force = true) } catch (t: Throwable) {
-            android.util.Log.w("MusWallMedia", "Metadata failed", t)
-        }
+        handlePlayback(controller.playbackState)
+        controller.metadata?.let { handleMetadata(it, force = true) }
     }
 
     private fun handlePlayback(state: PlaybackState?) {
@@ -100,33 +132,22 @@ class MediaNotificationListenerService : NotificationListenerService() {
         broadcastPlaybackState(now)
 
         if (!now) {
+            generation.incrementAndGet()
             generationJob?.cancel()
-            if (was && prefs.restoreOnPause && applied) {
-                applied = false
-                scope.launch(Dispatchers.IO) {
-                    if (prefs.liveWallpaperEnabled) {
-                        // Keep the live wallpaper installed. Its engine now draws the
-                        // separately configured home/lock originals using getWallpaperFlags().
-                        prefs.liveMusicPlaying = false
-                        sendBroadcast(Intent(MusicWallpaperService.ACTION_REFRESH).setPackage(packageName))
-                        broadcastWallpaperApplied("Original wallpaper restored")
-                    } else {
-                        val restored = wallpaperHelper.restoreOriginal()
-                        broadcastWallpaperApplied(
-                            if (restored.success) "Original home and lock wallpapers restored"
-                            else "Restore incomplete${restored.message?.let { ": $it" } ?: ""}"
-                        )
-                    }
-                }
+            currentTrackId = ""
+            if (was && prefs.restoreOnPause && prefs.liveWallpaperEnabled) {
+                prefs.liveMusicPlaying = false
+                sendBroadcast(Intent(MusicWallpaperService.ACTION_REFRESH).setPackage(packageName))
+                broadcastWallpaperApplied("Music stopped • original wallpaper restored")
             } else if (prefs.liveWallpaperEnabled) {
                 prefs.liveMusicPlaying = false
                 sendBroadcast(Intent(MusicWallpaperService.ACTION_REFRESH).setPackage(packageName))
             }
-        } else if (!was) {
-            // A resume does not necessarily emit a metadata callback. Force the
-            // current track through the renderer so the live wallpaper starts immediately.
-            activeController?.metadata?.let { handleMetadata(it, force = true) }
+            return
         }
+
+        // Resume/play events are handled immediately, even if metadata did not change.
+        activeController?.metadata?.let { handleMetadata(it, force = true) }
     }
 
     private fun handleMetadata(metadata: MediaMetadata?, force: Boolean = false) {
@@ -137,27 +158,38 @@ class MediaNotificationListenerService : NotificationListenerService() {
         prefs.lastTrackTitle = title
         prefs.lastArtist = artist
 
-        val id = "$title\u0000$artist"
+        val artUri = metadata.getString(MediaMetadata.METADATA_KEY_ALBUM_ART_URI)
+            ?: metadata.getString(MediaMetadata.METADATA_KEY_ART_URI).orEmpty()
+        val id = "$title\u0000$artist\u0000$artUri"
         if (!force && id == currentTrackId) return
         currentTrackId = id
+
         if (!prefs.isAutoEnabled || !playing || prefs.wallpaperMode != PreferencesManager.MODE_MUSIC) return
 
+        // IMPORTANT: Music mode never calls WallpaperManager.setBitmap().
+        // The generated image is handed to the already-installed live wallpaper.
+        if (!prefs.liveWallpaperEnabled) {
+            broadcastWallpaperApplied("Music detected • enable MusWall Live Wallpaper once")
+            return
+        }
+
+        val token = generation.incrementAndGet()
         generationJob?.cancel()
         generationJob = scope.launch(Dispatchers.Default) {
-            // No artificial transition delay: the expensive work is the render itself.
-            val art = extractArtwork(metadata) ?: return@launch
+            val art = extractArtwork(metadata) ?: run {
+                broadcastWallpaperApplied("Track detected, but no album artwork was available")
+                return@launch
+            }
             try {
-                renderAndApply(art)
+                renderAndSendToLiveWallpaper(art, token)
             } finally {
                 if (!art.isRecycled) art.recycle()
             }
         }
     }
 
-    private suspend fun renderAndApply(artwork: Bitmap) {
+    private suspend fun renderAndSendToLiveWallpaper(artwork: Bitmap, token: Long) {
         val dm = resources.displayMetrics
-        // Smaller live renders are intentionally used for low latency. The live
-        // wallpaper scales the result to the display; static Apply keeps the UI quality.
         val targetW = (dm.widthPixels * 0.58f).toInt().coerceIn(480, 720)
         val targetH = (dm.heightPixels * 0.58f).toInt().coerceIn(900, 1440)
         val result = PythonBridge.generateWallpaper(
@@ -165,23 +197,15 @@ class MediaNotificationListenerService : NotificationListenerService() {
             prefs.blurRadius.toFloat(), prefs.darkness / 100f, prefs.artScale / 100f,
             42, true, prefs.effect, prefs.blurType,
             prefs.coverHeight, prefs.coverOffset, prefs.transitionHeight
-        ) ?: run {
-            broadcastWallpaperApplied("Could not render artwork")
-            return
-        }
+        ) ?: return
 
         try {
+            if (token != generation.get() || !playing || !prefs.liveWallpaperEnabled) return
             wallpaperHelper.saveCurrentForLiveWallpaper(result)
-            if (prefs.liveWallpaperEnabled) {
-                prefs.liveMusicPlaying = true
-                sendBroadcast(Intent(MusicWallpaperService.ACTION_REFRESH).setPackage(packageName))
-                applied = true
-                broadcastWallpaperApplied("Live wallpaper updated")
-            } else {
-                val apply = wallpaperHelper.applyStatic(result, prefs.targetScreen)
-                applied = apply.success
-                broadcastWallpaperApplied(if (apply.success) "Wallpaper updated" else "Failed: ${apply.message ?: "unknown error"}")
-            }
+            if (token != generation.get() || !playing) return
+            prefs.liveMusicPlaying = true
+            sendBroadcast(Intent(MusicWallpaperService.ACTION_REFRESH).setPackage(packageName))
+            broadcastWallpaperApplied("Live wallpaper updated instantly")
         } finally {
             if (!result.isRecycled) result.recycle()
         }
@@ -238,7 +262,16 @@ class MediaNotificationListenerService : NotificationListenerService() {
             .putExtra(EXTRA_STATUS_MESSAGE, message))
     }
 
+    override fun onNotificationPosted(sbn: android.service.notification.StatusBarNotification?) {
+        refreshActiveSessions()
+    }
+
+    override fun onNotificationRemoved(sbn: android.service.notification.StatusBarNotification?) {
+        refreshActiveSessions()
+    }
+
     override fun onDestroy() {
+        generation.incrementAndGet()
         generationJob?.cancel()
         try { sessionManager?.removeOnActiveSessionsChangedListener(sessionsListener) } catch (_: Exception) {}
         try { activeController?.unregisterCallback(callback) } catch (_: Throwable) {}
