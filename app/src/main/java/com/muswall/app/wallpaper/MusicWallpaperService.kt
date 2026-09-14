@@ -73,11 +73,16 @@ class MusicWallpaperService : WallpaperService() {
         }
 
         override fun onWallpaperFlagsChanged(which: Int) { super.onWallpaperFlagsChanged(which); requestDraw(true) }
-        private fun requestDraw(force: Boolean = false) { drawHandler.removeCallbacks(refreshRunnable); drawHandler.post(refreshRunnable) }
+        private fun requestDraw(force: Boolean = false) {
+            drawHandler.removeCallbacks(refreshRunnable)
+            drawHandler.post(refreshRunnable)
+            if (visible && (prefs.bassEnabled || prefs.showLyrics)) {
+                drawHandler.postDelayed(refreshRunnable, if (prefs.bassEnabled) 50L else 80L)
+            }
+        }
 
         private fun sourceFile(): File? {
-            // Keep the last generated music frame visible even when playback is paused, the media service is killed,
-            // or the phone is restarted. This is the important difference from the old restore-on-pause behavior.
+            if (!prefs.liveMusicPlaying) return null
             val current = File(applicationContext.filesDir, WallpaperHelper.FILE_CURRENT)
             if (current.exists()) return current
             val last = File(applicationContext.filesDir, WallpaperHelper.FILE_LAST_ARTWORK)
@@ -107,7 +112,9 @@ class MusicWallpaperService : WallpaperService() {
             return result.sortedBy { it.time }
         }
 
-        private fun currentLyricLines(): List<String> {
+        private data class VisibleLyric(val line: LyricLine, val active: Boolean)
+
+        private fun currentLyricLines(): List<VisibleLyric> {
             if (!prefs.showLyrics) return emptyList()
             val raw = prefs.lastLyrics.trim()
             if (raw.isBlank()) return emptyList()
@@ -117,15 +124,22 @@ class MusicWallpaperService : WallpaperService() {
             }
             val synced = cachedLyricLines
             if (synced.isNotEmpty()) {
-                val index = synced.indexOfLast { it.time <= playbackPosition }.coerceAtLeast(0)
-                val from = maxOf(0, index - 1)
-                return synced.subList(from, minOf(synced.size, from + prefs.lyricsLines)).map { it.text }.filter { it.isNotBlank() }
+                val activeIndex = synced.indexOfLast { it.time <= playbackPosition }.let { if (it < 0) 0 else it }
+                val half = maxOf(0, prefs.lyricsLines / 2)
+                val from = (activeIndex - half).coerceAtLeast(0)
+                val to = minOf(synced.size, from + prefs.lyricsLines)
+                return synced.subList(from, to).map { VisibleLyric(it, it === synced[activeIndex]) }
             }
             val plain = raw.lines().map { it.trim() }.filter { it.isNotBlank() }
             if (plain.isEmpty()) return emptyList()
-            val estimatedIndex = ((playbackPosition / 1000L) / maxOf(1L, raw.length / 12L)).toInt().coerceIn(0, plain.lastIndex)
-            val from = maxOf(0, estimatedIndex - 1)
-            return plain.subList(from, minOf(plain.size, from + prefs.lyricsLines))
+            val step = maxOf(1200L, (prefs.lastDuration / maxOf(1, plain.size)).coerceAtLeast(1200L))
+            val activeIndex = (playbackPosition / step).toInt().coerceIn(0, plain.lastIndex)
+            val half = maxOf(0, prefs.lyricsLines / 2)
+            val from = (activeIndex - half).coerceAtLeast(0)
+            val to = minOf(plain.size, from + prefs.lyricsLines)
+            return plain.subList(from, to).mapIndexed { i, text ->
+                VisibleLyric(LyricLine((from + i) * step, text), from + i == activeIndex)
+            }
         }
 
         private fun ellipsize(value: String, width: Float): String {
@@ -155,22 +169,28 @@ class MusicWallpaperService : WallpaperService() {
             val x = canvas.width * prefs.lyricsX / 100f
             val y = canvas.height * prefs.lyricsY / 100f
             val maxWidth = canvas.width * prefs.lyricsWidth / 100f
-            textPaint.textSize = (canvas.width * prefs.lyricsSize / 1000f).coerceIn(18f, 96f)
+            val baseSize = (canvas.width * prefs.lyricsSize / 1000f).coerceIn(18f, 96f)
             textPaint.textAlign = Paint.Align.CENTER
             textPaint.style = Paint.Style.FILL
             textPaint.shader = null
-            textPaint.color = parseColor(prefs.lyricsColor, Color.WHITE)
-            applyTextShader(canvas.width.toFloat(), canvas.height.toFloat())
-            val lineHeight = textPaint.textSize * 1.28f
-            val visibleLines = lines.take(prefs.lyricsLines)
-            val start = y - ((visibleLines.size - 1) * lineHeight / 2f)
-            visibleLines.forEachIndexed { index, value ->
-                val safe = if (textPaint.measureText(value) > maxWidth) ellipsize(value, maxWidth) else value
-                val yy = start + index * lineHeight
-                if (prefs.lyricsShadow) { textPaint.setShadowLayer(8f, 2f, 2f, Color.BLACK); canvas.drawText(safe, x, yy, textPaint); textPaint.clearShadowLayer() }
-                else canvas.drawText(safe, x, yy, textPaint)
+            val lineHeight = baseSize * 1.35f
+            val startY = y - ((lines.size - 1) * lineHeight / 2f)
+            lines.forEachIndexed { index, item ->
+                val active = item.active
+                textPaint.textSize = if (active) baseSize * 1.08f else baseSize * 0.92f
+                textPaint.alpha = if (active) 255 else 125
+                textPaint.color = parseColor(if (active) prefs.lyricsColor else prefs.lyricsColor2, Color.WHITE)
+                applyTextShader(canvas.width.toFloat(), canvas.height.toFloat())
+                val safe = if (textPaint.measureText(item.line.text) > maxWidth) ellipsize(item.line.text, maxWidth) else item.line.text
+                val yy = startY + index * lineHeight
+                if (prefs.lyricsShadow || active) {
+                    textPaint.setShadowLayer(if (active) 12f else 5f, 0f, 2f, Color.BLACK)
+                    canvas.drawText(safe, x, yy, textPaint)
+                    textPaint.clearShadowLayer()
+                } else canvas.drawText(safe, x, yy, textPaint)
+                textPaint.shader = null
             }
-            textPaint.shader = null
+            textPaint.alpha = 255
         }
 
         private fun bassPaint(canvas: Canvas): Paint {

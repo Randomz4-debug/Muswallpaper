@@ -69,12 +69,12 @@ class MusicWidgetProvider : AppWidgetProvider() {
         if (widgetIds.isEmpty()) return
 
         val prefs = PreferencesManager.getInstance(context)
-        val bg = parseColor(prefs.widgetBackgroundColor, Color.rgb(23, 21, 31))
-        val bar = parseColor(prefs.widgetBarColor, Color.WHITE)
-        val textColor = parseColor(prefs.widgetTextColor, Color.WHITE)
-        val secondary = parseColor(prefs.widgetSecondaryColor, Color.LTGRAY)
-        val opacity = (255f * prefs.widgetOpacity.coerceIn(0, 100) / 100f).toInt()
-        val barOpacity = (255f * prefs.widgetBarOpacity.coerceIn(0, 100) / 100f).toInt()
+        val bg = Color.WHITE
+        val bar = Color.WHITE
+        val textColor = Color.BLACK
+        val secondary = Color.rgb(75, 75, 82)
+        val opacity = 112
+        val barOpacity = 42
 
         widgetIds.forEach { id ->
             val views = RemoteViews(context.packageName, R.layout.widget_music)
@@ -104,7 +104,7 @@ class MusicWidgetProvider : AppWidgetProvider() {
             )
             views.setViewVisibility(
                 R.id.widgetGlassBar,
-                if (prefs.widgetBarEnabled) View.VISIBLE else View.GONE
+                View.VISIBLE
             )
 
             val title = prefs.lastTrackTitle.ifBlank { prefs.widgetEmptyTitle }

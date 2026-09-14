@@ -58,10 +58,13 @@ class MediaNotificationListenerService : NotificationListenerService() {
             if (!playing) return
             val controller = activeController
             val state = controller?.playbackState
-            val position = state?.position?.coerceAtLeast(0L) ?: prefs.lyricsPosition
+            val basePosition = state?.position?.coerceAtLeast(0L) ?: prefs.lyricsPosition
+            val updateTime = state?.lastPositionUpdateTime ?: 0L
+            val elapsed = if (updateTime > 0L) (android.os.SystemClock.elapsedRealtime() - updateTime).coerceAtLeast(0L) else 0L
+            val position = (basePosition + elapsed).coerceAtLeast(0L)
             prefs.lyricsPosition = position
             sendBroadcast(Intent(ACTION_LIVE_TICK).setPackage(packageName).putExtra(EXTRA_POSITION_MS, position))
-            timelineHandler.postDelayed(this, 150L)
+            timelineHandler.postDelayed(this, 60L)
         }
     }
 
