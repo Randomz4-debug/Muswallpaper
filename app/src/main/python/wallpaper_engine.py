@@ -26,15 +26,10 @@ def _hex(value, fallback):
 
 def _gradient(size, c1, c2):
     w, h = size
-    out = Image.new("RGBA", size, c1 + (255,))
-    px = out.load()
-    den = max(1, h - 1)
-    for y in range(h):
-        t = y / den
-        row = tuple(int(c1[i] * (1.0 - t) + c2[i] * t) for i in range(3)) + (255,)
-        for x in range(w):
-            px[x, y] = row
-    return out
+    # Generate a tiny vertical gradient and scale it instead of looping over millions of pixels.
+    strip = Image.new("RGBA", (1, 2), c1 + (255,))
+    strip.putpixel((0, 1), c2 + (255,))
+    return strip.resize((w, h), Image.Resampling.BILINEAR)
 
 
 def process_wallpaper(artwork_bytes: bytes, target_width=720, target_height=1600,
@@ -56,7 +51,6 @@ def process_wallpaper(artwork_bytes: bytes, target_width=720, target_height=1600
     c2 = _hex(background_color2, "#5E2CA5")
     accent = _hex(accent_color, "#7C00FF")
 
-    # Build the background independently from the album-card layer.
     if background_mode == "COLOR":
         bg = Image.new("RGBA", (w, h), c1 + (255,))
     elif background_mode == "GRADIENT":
@@ -72,9 +66,9 @@ def process_wallpaper(artwork_bytes: bytes, target_width=720, target_height=1600
         if blur_type == "SOLID":
             bg = small.resize((w, h), Image.Resampling.BILINEAR)
         elif blur_type == "GLASS":
-            bg = ImageEnhance.Brightness(
-                small.filter(ImageFilter.GaussianBlur(max(2, radius * 1.4))).resize((w, h), Image.Resampling.BILINEAR)
-            ).enhance(1.06)
+            bg = ImageEnhance.Brightness(small.filter(ImageFilter.GaussianBlur(max(2, radius * 1.4))).resize((w, h), Image.Resampling.BILINEAR)).enhance(1.06)
+        elif blur_type == "MOTION":
+            bg = small.filter(ImageFilter.GaussianBlur(max(1, radius * 1.25))).resize((w, h), Image.Resampling.BILINEAR)
         else:
             bg = small.filter(ImageFilter.GaussianBlur(max(1, radius))).resize((w, h), Image.Resampling.BILINEAR)
 
@@ -83,7 +77,6 @@ def process_wallpaper(artwork_bytes: bytes, target_width=720, target_height=1600
         bg = ImageEnhance.Brightness(bg).enhance(1.0 - d * 0.65)
         bg = Image.alpha_composite(bg, Image.new("RGBA", (w, h), (0, 0, 0, int(d * 150))))
 
-    # Cover Scale + Cover Height both affect the actual cover size.
     scale = max(0.2, min(float(art_scale), 1.0))
     height_factor = 0.70 + (max(0, min(int(cover_height), 100)) / 100.0) * 0.60
     size = int(min(w, h) * scale * height_factor)
@@ -95,7 +88,6 @@ def process_wallpaper(artwork_bytes: bytes, target_width=720, target_height=1600
         ImageDraw.Draw(mask).ellipse((0, 0, size - 1, size - 1), fill=255)
         disc = Image.new("RGBA", art.size, (0, 0, 0, 0))
         disc.paste(art, (0, 0), mask)
-        # Center hole + subtle ring make the CD effect actually visible.
         dd = ImageDraw.Draw(disc)
         hole = max(4, size // 18)
         dd.ellipse((size // 2 - hole, size // 2 - hole, size // 2 + hole, size // 2 + hole), fill=(235, 235, 235, 210))
@@ -106,18 +98,15 @@ def process_wallpaper(artwork_bytes: bytes, target_width=720, target_height=1600
     else:
         art = _round(art, int(corner_radius))
 
-    # Cover Offset is a stable vertical position: 0 = upper, 50 = center, 100 = lower.
     offset = max(0, min(int(cover_offset), 100)) / 100.0
     y = int((h - size) * offset)
     x = (w - size) // 2
 
-    # Transition height is a soft color fade behind the cover, not a no-op slider.
     transition = max(0, min(int(transition_height), 100))
     if transition:
         band = max(30, int(h * (0.10 + transition * 0.003)))
         glow = Image.new("RGBA", (size + band * 2, size + band * 2), (0, 0, 0, 0))
-        gd = ImageDraw.Draw(glow)
-        gd.rounded_rectangle((band, band, band + size, band + size), radius=max(24, int(corner_radius)), fill=accent + (42,))
+        ImageDraw.Draw(glow).rounded_rectangle((band, band, band + size, band + size), radius=max(24, int(corner_radius)), fill=accent + (42,))
         glow = glow.filter(ImageFilter.GaussianBlur(max(8, band // 3)))
         bg.alpha_composite(glow, (x - band, y - band))
 
@@ -132,7 +121,6 @@ def process_wallpaper(artwork_bytes: bytes, target_width=720, target_height=1600
     if effect == "COVER_COLOR" or background_mode == "AUTO":
         bg = Image.alpha_composite(bg, Image.new("RGBA", (w, h), avg + (34,)))
 
-    # A tiny accent border makes the chosen color visible without covering artwork.
     border = Image.new("RGBA", (size + 4, size + 4), (0, 0, 0, 0))
     ImageDraw.Draw(border).rounded_rectangle((1, 1, size + 2, size + 2), radius=max(2, int(corner_radius)), outline=accent + (105,), width=2)
     bg.alpha_composite(border, (x - 2, y - 2))
