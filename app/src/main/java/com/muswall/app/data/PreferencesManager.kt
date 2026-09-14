@@ -1,135 +1,66 @@
 package com.muswall.app.data
 
 import android.content.Context
-import android.content.SharedPreferences
 
-class PreferencesManager(context: Context) {
-    private val prefs: SharedPreferences = context.getSharedPreferences("muswall_preferences", Context.MODE_PRIVATE)
+class PreferencesManager private constructor(context: Context) {
+    private val sp = context.applicationContext.getSharedPreferences("muswall", Context.MODE_PRIVATE)
 
     companion object {
-        const val TARGET_BOTH = "BOTH"
-        const val TARGET_HOME = "HOME"
-        const val TARGET_LOCK = "LOCK"
-
-        const val MODE_MUSIC = "MUSIC"
-        const val MODE_STATIC = "STATIC"
-
-        const val EFFECT_BLUR = "BLUR"
-        const val EFFECT_COVER = "COVER"
-        const val EFFECT_CD = "CD"
-        const val EFFECT_SQUARE = "SQUARE"
-        const val EFFECT_COVER_COLOR = "COVER_COLOR"
-
-        const val BLUR_GAUSSIAN = "GAUSSIAN"
-        const val BLUR_SOLID = "SOLID"
-        const val BLUR_MOTION = "MOTION"
-        const val BLUR_GLASS = "GLASS"
-
-        const val BACKGROUND_ART = "ART"
-        const val BACKGROUND_COLOR = "COLOR"
-        const val BACKGROUND_GRADIENT = "GRADIENT"
-        const val BACKGROUND_AUTO = "AUTO"
-
-        fun getInstance(context: Context) = PreferencesManager(context.applicationContext)
+        @Volatile private var INSTANCE: PreferencesManager? = null
+        fun getInstance(context: Context): PreferencesManager = INSTANCE ?: synchronized(this) {
+            INSTANCE ?: PreferencesManager(context).also { INSTANCE = it }
+        }
+        const val MODE_MUSIC = "music"
+        const val MODE_STATIC = "static"
+        const val EFFECT_BLUR = "blur"
+        const val EFFECT_COVER = "cover"
+        const val EFFECT_CD = "cd"
+        const val EFFECT_SQUARE = "square"
+        const val EFFECT_COVER_COLOR = "cover_color"
+        const val BLUR_GAUSSIAN = "gaussian"
+        const val BLUR_SOLID = "solid"
+        const val BLUR_MOTION = "motion"
+        const val BLUR_GLASS = "glass"
+        const val BACKGROUND_ART = "art"
+        const val BACKGROUND_COLOR = "color"
+        const val BACKGROUND_GRADIENT = "gradient"
+        const val BACKGROUND_AUTO = "auto"
+        const val PHOTO_ALBUM = "album"
+        const val PHOTO_ART = "art"
+        const val PHOTO_DISPLAY_ICON = "display_icon"
+        const val PHOTO_NOTIFICATION = "notification"
+        const val PHOTO_CUSTOM = "custom"
+        const val PHOTO_ARTIST = "artist"
+        const val PHOTO_BACKGROUND = "background"
     }
 
-    var isAutoEnabled: Boolean
-        get() = prefs.getBoolean("auto_enabled", true)
-        set(v) = prefs.edit().putBoolean("auto_enabled", v).apply()
+    var isAutoEnabled: Boolean get() = sp.getBoolean("auto", true) set(v) { sp.edit().putBoolean("auto", v).apply() }
+    var restoreOnPause: Boolean get() = sp.getBoolean("restore_pause", true) set(v) { sp.edit().putBoolean("restore_pause", v).apply() }
+    var wallpaperMode: String get() = sp.getString("mode", MODE_MUSIC) ?: MODE_MUSIC set(v) { sp.edit().putString("mode", v).apply() }
+    var staticWallpaperUri: String get() = sp.getString("static_uri", "") ?: "" set(v) { sp.edit().putString("static_uri", v).apply() }
+    var targetScreen: Int get() = sp.getInt("target_screen", 3) set(v) { sp.edit().putInt("target_screen", v).apply() }
+    var originalHomeWallpaperUri: String get() = sp.getString("original_home_uri", "") ?: "" set(v) { sp.edit().putString("original_home_uri", v).apply() }
+    var originalLockWallpaperUri: String get() = sp.getString("original_lock_uri", "") ?: "" set(v) { sp.edit().putString("original_lock_uri", v).apply() }
+    var liveWallpaperEnabled: Boolean get() = sp.getBoolean("live_enabled", false) set(v) { sp.edit().putBoolean("live_enabled", v).apply() }
+    var liveMusicPlaying: Boolean get() = sp.getBoolean("live_playing", false) set(v) { sp.edit().putBoolean("live_playing", v).apply() }
+    var lastTrackTitle: String get() = sp.getString("last_title", "") ?: "" set(v) { sp.edit().putString("last_title", v).apply() }
+    var lastArtist: String get() = sp.getString("last_artist", "") ?: "" set(v) { sp.edit().putString("last_artist", v).apply() }
+    var effect: String get() = sp.getString("effect", EFFECT_COVER) ?: EFFECT_COVER set(v) { sp.edit().putString("effect", v).apply() }
+    var blurType: String get() = sp.getString("blur_type", BLUR_GAUSSIAN) ?: BLUR_GAUSSIAN set(v) { sp.edit().putString("blur_type", v).apply() }
+    var blurRadius: Int get() = sp.getInt("blur_radius", 24) set(v) { sp.edit().putInt("blur_radius", v.coerceIn(0, 80)).apply() }
+    var darkness: Int get() = sp.getInt("darkness", 20) set(v) { sp.edit().putInt("darkness", v.coerceIn(0, 100)).apply() }
+    var artScale: Int get() = sp.getInt("art_scale", 82) set(v) { sp.edit().putInt("art_scale", v.coerceIn(20, 120)).apply() }
+    var coverHeight: Int get() = sp.getInt("cover_height", 46) set(v) { sp.edit().putInt("cover_height", v.coerceIn(10, 90)).apply() }
+    var coverOffset: Int get() = sp.getInt("cover_offset", 0) set(v) { sp.edit().putInt("cover_offset", v.coerceIn(-50, 50)).apply() }
+    var transitionHeight: Int get() = sp.getInt("transition_height", 28) set(v) { sp.edit().putInt("transition_height", v.coerceIn(0, 100)).apply() }
+    var backgroundMode: String get() = sp.getString("background_mode", BACKGROUND_ART) ?: BACKGROUND_ART set(v) { sp.edit().putString("background_mode", v).apply() }
+    var backgroundColor: String get() = sp.getString("background_color", "#101010") ?: "#101010" set(v) { sp.edit().putString("background_color", v).apply() }
+    var backgroundColor2: String get() = sp.getString("background_color2", "#303030") ?: "#303030" set(v) { sp.edit().putString("background_color2", v).apply() }
+    var accentColor: String get() = sp.getString("accent_color", "#FFFFFF") ?: "#FFFFFF" set(v) { sp.edit().putString("accent_color", v).apply() }
+    var showLyrics: Boolean get() = sp.getBoolean("show_lyrics", false) set(v) { sp.edit().putBoolean("show_lyrics", v).apply() }
+    var photoSource: String get() = sp.getString("photo_source", PHOTO_ALBUM) ?: PHOTO_ALBUM set(v) { sp.edit().putString("photo_source", v).apply() }
+    var customPhotoUri: String get() = sp.getString("custom_photo_uri", "") ?: "" set(v) { sp.edit().putString("custom_photo_uri", v).apply() }
+    var photoFallback: Boolean get() = sp.getBoolean("photo_fallback", true) set(v) { sp.edit().putBoolean("photo_fallback", v).apply() }
 
-    var restoreOnPause: Boolean
-        get() = prefs.getBoolean("restore_on_pause", true)
-        set(v) = prefs.edit().putBoolean("restore_on_pause", v).apply()
-
-    var wallpaperMode: String
-        get() = prefs.getString("wallpaper_mode", MODE_MUSIC) ?: MODE_MUSIC
-        set(v) = prefs.edit().putString("wallpaper_mode", v).apply()
-
-    var effect: String
-        get() = prefs.getString("effect", EFFECT_BLUR) ?: EFFECT_BLUR
-        set(v) = prefs.edit().putString("effect", v).apply()
-
-    var blurType: String
-        get() = prefs.getString("blur_type", BLUR_GAUSSIAN) ?: BLUR_GAUSSIAN
-        set(v) = prefs.edit().putString("blur_type", v).apply()
-
-    var blurRadius: Int
-        get() = prefs.getInt("blur_radius", 80)
-        set(v) = prefs.edit().putInt("blur_radius", v.coerceIn(0, 100)).apply()
-
-    var darkness: Int
-        get() = prefs.getInt("darkness", 0)
-        set(v) = prefs.edit().putInt("darkness", v.coerceIn(0, 100)).apply()
-
-    var artScale: Int
-        get() = prefs.getInt("art_scale", 72)
-        set(v) = prefs.edit().putInt("art_scale", v.coerceIn(20, 100)).apply()
-
-    var coverHeight: Int
-        get() = prefs.getInt("cover_height", 44)
-        set(v) = prefs.edit().putInt("cover_height", v.coerceIn(0, 100)).apply()
-
-    var coverOffset: Int
-        get() = prefs.getInt("cover_offset", 50)
-        set(v) = prefs.edit().putInt("cover_offset", v.coerceIn(0, 100)).apply()
-
-    var transitionHeight: Int
-        get() = prefs.getInt("transition_height", 20)
-        set(v) = prefs.edit().putInt("transition_height", v.coerceIn(0, 100)).apply()
-
-    var targetScreen: String
-        get() = prefs.getString("target_screen", TARGET_BOTH) ?: TARGET_BOTH
-        set(v) = prefs.edit().putString("target_screen", v).apply()
-
-    var liveWallpaperEnabled: Boolean
-        get() = prefs.getBoolean("live_wallpaper_enabled", false)
-        set(v) = prefs.edit().putBoolean("live_wallpaper_enabled", v).apply()
-
-    var liveMusicPlaying: Boolean
-        get() = prefs.getBoolean("live_music_playing", false)
-        set(v) = prefs.edit().putBoolean("live_music_playing", v).apply()
-
-    var originalHomeWallpaperUri: String
-        get() = prefs.getString("original_home_uri", "") ?: ""
-        set(v) = prefs.edit().putString("original_home_uri", v).apply()
-
-    var originalLockWallpaperUri: String
-        get() = prefs.getString("original_lock_uri", "") ?: ""
-        set(v) = prefs.edit().putString("original_lock_uri", v).apply()
-
-    var originalBackedUp: Boolean
-        get() = prefs.getBoolean("originals_backed_up", false)
-        set(v) = prefs.edit().putBoolean("originals_backed_up", v).apply()
-
-    var backgroundMode: String
-        get() = prefs.getString("background_mode", BACKGROUND_ART) ?: BACKGROUND_ART
-        set(v) = prefs.edit().putString("background_mode", v).apply()
-
-    var backgroundColor: String
-        get() = prefs.getString("background_color", "#111111") ?: "#111111"
-        set(v) = prefs.edit().putString("background_color", v).apply()
-
-    var backgroundColor2: String
-        get() = prefs.getString("background_color_2", "#5E2CA5") ?: "#5E2CA5"
-        set(v) = prefs.edit().putString("background_color_2", v).apply()
-
-    var accentColor: String
-        get() = prefs.getString("accent_color", "#7C00FF") ?: "#7C00FF"
-        set(v) = prefs.edit().putString("accent_color", v).apply()
-
-    var lastTrackTitle: String
-        get() = prefs.getString("last_track", "") ?: ""
-        set(v) = prefs.edit().putString("last_track", v).apply()
-
-    var lastArtist: String
-        get() = prefs.getString("last_artist", "") ?: ""
-        set(v) = prefs.edit().putString("last_artist", v).apply()
-
-    var lastArtworkPath: String
-        get() = prefs.getString("last_artwork_path", "") ?: ""
-        set(v) = prefs.edit().putString("last_artwork_path", v).apply()
-
-    var staticWallpaperUri: String
-        get() = prefs.getString("static_uri", "") ?: ""
-        set(v) = prefs.edit().putString("static_uri", v).apply()
+    var restoreDelay: Int get() = sp.getInt("restore_delay", 0) set(v) { sp.edit().putInt("restore_delay", v).apply() }
 }
