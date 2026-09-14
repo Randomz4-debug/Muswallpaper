@@ -80,6 +80,19 @@ class PreferencesManager(context: Context) {
         get() = prefs.getBoolean("live_wallpaper_enabled", false)
         set(v) = prefs.edit().putBoolean("live_wallpaper_enabled", v).apply()
 
+    /** True while the live wallpaper should display the generated music wallpaper. */
+    var liveMusicPlaying: Boolean
+        get() = prefs.getBoolean("live_music_playing", false)
+        set(v) = prefs.edit().putBoolean("live_music_playing", v).apply()
+
+    var originalHomeWallpaperUri: String
+        get() = prefs.getString("original_home_uri", "") ?: ""
+        set(v) = prefs.edit().putString("original_home_uri", v).apply()
+
+    var originalLockWallpaperUri: String
+        get() = prefs.getString("original_lock_uri", "") ?: ""
+        set(v) = prefs.edit().putString("original_lock_uri", v).apply()
+
     var originalBackedUp: Boolean
         get() = prefs.getBoolean("originals_backed_up", false)
         set(v) = prefs.edit().putBoolean("originals_backed_up", v).apply()
