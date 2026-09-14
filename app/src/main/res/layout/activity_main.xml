@@ -204,10 +204,10 @@
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 
-        <com.google.android.material.materialswitch.MaterialSwitch
-            android:id="@+id/switchAutoWallpaper" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="10dp" android:text="Automatic music wallpaper" android:textSize="16sp"/>
-        <com.google.android.material.materialswitch.MaterialSwitch
-            android:id="@+id/switchRestoreOnPause" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Restore wallpaper when music pauses" android:textSize="16sp"/>
+        <androidx.appcompat.widget.SwitchCompat
+            android:id="@+id/switchAutoWallpaper" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="10dp" android:text="Automatic music wallpaper" android:textSize="16sp" android:showText="false" android:textOn="" android:textOff=""/>
+        <androidx.appcompat.widget.SwitchCompat
+            android:id="@+id/switchRestoreOnPause" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Restore wallpaper when music pauses" android:textSize="16sp" android:showText="false" android:textOn="" android:textOff=""/>
 
         <com.google.android.material.button.MaterialButton android:id="@+id/btnApply" android:layout_width="match_parent" android:layout_height="60dp" android:layout_marginTop="14dp" android:text="▧  Apply wallpaper" android:textSize="17sp" app:cornerRadius="30dp"/>
         <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center" android:layout_marginTop="10dp" android:text="MusWall • fast renderer • real Android live wallpaper" android:textSize="11sp" android:textColor="#777D74"/>

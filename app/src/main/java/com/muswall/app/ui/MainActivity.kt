@@ -19,7 +19,6 @@ import androidx.core.content.ContextCompat
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.button.MaterialButtonToggleGroup
 import com.google.android.material.chip.ChipGroup
-import com.google.android.material.materialswitch.MaterialSwitch
 import com.google.android.material.slider.Slider
 import android.widget.TextView
 import com.muswall.app.R
@@ -210,11 +209,11 @@ class MainActivity : AppCompatActivity() {
     private fun setupActions() {
         findViewById<View>(R.id.btnAddImage).setOnClickListener { pickImage.launch(arrayOf("image/*")) }
         findViewById<View>(R.id.galleryPlaceholder).setOnClickListener { pickImage.launch(arrayOf("image/*")) }
-        findViewById<MaterialSwitch>(R.id.switchAutoWallpaper).apply {
+        findViewById<androidx.appcompat.widget.SwitchCompat>(R.id.switchAutoWallpaper).apply {
             isChecked = prefs.isAutoEnabled
             setOnCheckedChangeListener { _, checked -> prefs.isAutoEnabled = checked }
         }
-        findViewById<MaterialSwitch>(R.id.switchRestoreOnPause).apply {
+        findViewById<androidx.appcompat.widget.SwitchCompat>(R.id.switchRestoreOnPause).apply {
             isChecked = prefs.restoreOnPause
             setOnCheckedChangeListener { _, checked -> prefs.restoreOnPause = checked }
         }
