@@ -18,10 +18,14 @@ class PreferencesManager private constructor(context: Context) {
         const val EFFECT_CD = "cd"
         const val EFFECT_SQUARE = "square"
         const val EFFECT_COVER_COLOR = "cover_color"
+        const val EFFECT_KALEIDOSCOPE = "kaleidoscope"
+        const val EFFECT_PULSE = "pulse"
+        const val EFFECT_FLOAT = "float"
         const val BLUR_GAUSSIAN = "gaussian"
         const val BLUR_SOLID = "solid"
         const val BLUR_MOTION = "motion"
         const val BLUR_GLASS = "glass"
+        const val BLUR_RADIAL = "radial"
         const val BACKGROUND_ART = "art"
         const val BACKGROUND_COLOR = "color"
         const val BACKGROUND_GRADIENT = "gradient"
@@ -59,6 +63,7 @@ class PreferencesManager private constructor(context: Context) {
     var lastTrackTitle: String get() = sp.getString("last_title", "") ?: ""; set(v) = sp.edit().putString("last_title", v).apply()
     var lastArtist: String get() = sp.getString("last_artist", "") ?: ""; set(v) = sp.edit().putString("last_artist", v).apply()
     var lastLyrics: String get() = sp.getString("last_lyrics", "") ?: ""; set(v) = sp.edit().putString("last_lyrics", v).apply()
+    var lyricsPosition: Long get() = sp.getLong("lyrics_position", 0L); set(v) = sp.edit().putLong("lyrics_position", v.coerceAtLeast(0L)).apply()
     var effect: String get() = sp.getString("effect", EFFECT_COVER) ?: EFFECT_COVER; set(v) = sp.edit().putString("effect", v).apply()
     var blurType: String get() = sp.getString("blur_type", BLUR_GAUSSIAN) ?: BLUR_GAUSSIAN; set(v) = sp.edit().putString("blur_type", v).apply()
     var blurRadius: Int get() = sp.getInt("blur_radius", 24); set(v) = sp.edit().putInt("blur_radius", v.coerceIn(0, 80)).apply()
@@ -72,6 +77,20 @@ class PreferencesManager private constructor(context: Context) {
     var backgroundColor2: String get() = sp.getString("background_color2", "#303030") ?: "#303030"; set(v) = sp.edit().putString("background_color2", v).apply()
     var accentColor: String get() = sp.getString("accent_color", "#FFFFFF") ?: "#FFFFFF"; set(v) = sp.edit().putString("accent_color", v).apply()
     var showLyrics: Boolean get() = sp.getBoolean("show_lyrics", false); set(v) = sp.edit().putBoolean("show_lyrics", v).apply()
+    var lyricsX: Int get() = sp.getInt("lyrics_x", 50); set(v) = sp.edit().putInt("lyrics_x", v.coerceIn(0, 100)).apply()
+    var lyricsY: Int get() = sp.getInt("lyrics_y", 78); set(v) = sp.edit().putInt("lyrics_y", v.coerceIn(0, 100)).apply()
+    var lyricsWidth: Int get() = sp.getInt("lyrics_width", 88); set(v) = sp.edit().putInt("lyrics_width", v.coerceIn(20, 100)).apply()
+    var lyricsSize: Int get() = sp.getInt("lyrics_size", 22); set(v) = sp.edit().putInt("lyrics_size", v.coerceIn(10, 72)).apply()
+    var lyricsLines: Int get() = sp.getInt("lyrics_lines", 3); set(v) = sp.edit().putInt("lyrics_lines", v.coerceIn(1, 6)).apply()
+    var lyricsColor: String get() = sp.getString("lyrics_color", "#FFFFFF") ?: "#FFFFFF"; set(v) = sp.edit().putString("lyrics_color", v).apply()
+    var lyricsShadow: Boolean get() = sp.getBoolean("lyrics_shadow", true); set(v) = sp.edit().putBoolean("lyrics_shadow", v).apply()
+    var bassEnabled: Boolean get() = sp.getBoolean("bass_enabled", true); set(v) = sp.edit().putBoolean("bass_enabled", v).apply()
+    var bassX: Int get() = sp.getInt("bass_x", 50); set(v) = sp.edit().putInt("bass_x", v.coerceIn(0, 100)).apply()
+    var bassY: Int get() = sp.getInt("bass_y", 90); set(v) = sp.edit().putInt("bass_y", v.coerceIn(0, 100)).apply()
+    var bassWidth: Int get() = sp.getInt("bass_width", 82); set(v) = sp.edit().putInt("bass_width", v.coerceIn(20, 100)).apply()
+    var bassHeight: Int get() = sp.getInt("bass_height", 8); set(v) = sp.edit().putInt("bass_height", v.coerceIn(2, 30)).apply()
+    var bassSensitivity: Int get() = sp.getInt("bass_sensitivity", 70); set(v) = sp.edit().putInt("bass_sensitivity", v.coerceIn(0, 100)).apply()
+    var bassColor: String get() = sp.getString("bass_color", "#FFFFFF") ?: "#FFFFFF"; set(v) = sp.edit().putString("bass_color", v).apply()
     var photoSource: String get() = sp.getString("photo_source", PHOTO_AUTO) ?: PHOTO_AUTO; set(v) = sp.edit().putString("photo_source", v).apply()
     var customPhotoUri: String get() = sp.getString("custom_photo_uri", "") ?: ""; set(v) = sp.edit().putString("custom_photo_uri", v).apply()
     var photoFallback: Boolean get() = sp.getBoolean("photo_fallback", true); set(v) = sp.edit().putBoolean("photo_fallback", v).apply()
@@ -79,4 +98,6 @@ class PreferencesManager private constructor(context: Context) {
     var renderResolution: String get() = sp.getString("render_resolution", RESOLUTION_DEVICE) ?: RESOLUTION_DEVICE; set(v) = sp.edit().putString("render_resolution", v).apply()
     var customRenderWidth: Int get() = sp.getInt("render_width", 1080).coerceIn(160, 16384); set(v) = sp.edit().putInt("render_width", v.coerceIn(160, 16384)).apply()
     var customRenderHeight: Int get() = sp.getInt("render_height", 2400).coerceIn(240, 16384); set(v) = sp.edit().putInt("render_height", v.coerceIn(240, 16384)).apply()
+    var widgetStyle: Int get() = sp.getInt("widget_style", 0); set(v) = sp.edit().putInt("widget_style", v.coerceIn(0, 2)).apply()
+    var widgetOpacity: Int get() = sp.getInt("widget_opacity", 92); set(v) = sp.edit().putInt("widget_opacity", v.coerceIn(20, 100)).apply()
 }
