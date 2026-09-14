@@ -52,7 +52,6 @@ class MediaNotificationListenerService : NotificationListenerService() {
     override fun onCreate() {
         super.onCreate()
         prefs = PreferencesManager.getInstance(this)
-        // MusWallApp initializes the application context. Do not start Python here.
         wallpaperHelper = WallpaperHelper(this)
         PythonBridge.initialize(this)
     }
@@ -89,7 +88,7 @@ class MediaNotificationListenerService : NotificationListenerService() {
         try { handlePlayback(controller?.playbackState) } catch (t: Throwable) {
             android.util.Log.w("MusWallMedia", "Playback state failed", t)
         }
-        try { handleMetadata(controller?.metadata) } catch (t: Throwable) {
+        try { handleMetadata(controller?.metadata, force = true) } catch (t: Throwable) {
             android.util.Log.w("MusWallMedia", "Metadata failed", t)
         }
     }
@@ -99,18 +98,38 @@ class MediaNotificationListenerService : NotificationListenerService() {
         val was = playing
         playing = now
         broadcastPlaybackState(now)
-        if (was && !now && prefs.restoreOnPause && applied) {
-            scope.launch {
-                wallpaperHelper.copyOriginalToLiveCache()
-                if (!prefs.liveWallpaperEnabled) wallpaperHelper.restoreOriginal()
-                else sendBroadcast(Intent(MusicWallpaperService.ACTION_REFRESH).setPackage(packageName))
+
+        if (!now) {
+            generationJob?.cancel()
+            if (was && prefs.restoreOnPause && applied) {
                 applied = false
-                broadcastWallpaperApplied("Original wallpaper restored")
+                scope.launch(Dispatchers.IO) {
+                    if (prefs.liveWallpaperEnabled) {
+                        // Keep the live wallpaper installed. Its engine now draws the
+                        // separately configured home/lock originals using getWallpaperFlags().
+                        prefs.liveMusicPlaying = false
+                        sendBroadcast(Intent(MusicWallpaperService.ACTION_REFRESH).setPackage(packageName))
+                        broadcastWallpaperApplied("Original wallpaper restored")
+                    } else {
+                        val restored = wallpaperHelper.restoreOriginal()
+                        broadcastWallpaperApplied(
+                            if (restored.success) "Original home and lock wallpapers restored"
+                            else "Restore incomplete${restored.message?.let { ": $it" } ?: ""}"
+                        )
+                    }
+                }
+            } else if (prefs.liveWallpaperEnabled) {
+                prefs.liveMusicPlaying = false
+                sendBroadcast(Intent(MusicWallpaperService.ACTION_REFRESH).setPackage(packageName))
             }
+        } else if (!was) {
+            // A resume does not necessarily emit a metadata callback. Force the
+            // current track through the renderer so the live wallpaper starts immediately.
+            activeController?.metadata?.let { handleMetadata(it, force = true) }
         }
     }
 
-    private fun handleMetadata(metadata: MediaMetadata?) {
+    private fun handleMetadata(metadata: MediaMetadata?, force: Boolean = false) {
         if (metadata == null) return
         val title = metadata.getString(MediaMetadata.METADATA_KEY_TITLE)?.trim().orEmpty().ifEmpty { "Unknown title" }
         val artist = metadata.getString(MediaMetadata.METADATA_KEY_ARTIST)?.trim().orEmpty().ifEmpty { "Unknown artist" }
@@ -119,13 +138,13 @@ class MediaNotificationListenerService : NotificationListenerService() {
         prefs.lastArtist = artist
 
         val id = "$title\u0000$artist"
-        if (id == currentTrackId) return
+        if (!force && id == currentTrackId) return
         currentTrackId = id
         if (!prefs.isAutoEnabled || !playing || prefs.wallpaperMode != PreferencesManager.MODE_MUSIC) return
 
         generationJob?.cancel()
         generationJob = scope.launch(Dispatchers.Default) {
-            delay(180)
+            // No artificial transition delay: the expensive work is the render itself.
             val art = extractArtwork(metadata) ?: return@launch
             try {
                 renderAndApply(art)
@@ -137,8 +156,10 @@ class MediaNotificationListenerService : NotificationListenerService() {
 
     private suspend fun renderAndApply(artwork: Bitmap) {
         val dm = resources.displayMetrics
-        val targetW = (dm.widthPixels * 0.75f).toInt().coerceIn(480, 900)
-        val targetH = (dm.heightPixels * 0.75f).toInt().coerceIn(960, 1800)
+        // Smaller live renders are intentionally used for low latency. The live
+        // wallpaper scales the result to the display; static Apply keeps the UI quality.
+        val targetW = (dm.widthPixels * 0.58f).toInt().coerceIn(480, 720)
+        val targetH = (dm.heightPixels * 0.58f).toInt().coerceIn(900, 1440)
         val result = PythonBridge.generateWallpaper(
             artwork, targetW, targetH,
             prefs.blurRadius.toFloat(), prefs.darkness / 100f, prefs.artScale / 100f,
@@ -152,6 +173,7 @@ class MediaNotificationListenerService : NotificationListenerService() {
         try {
             wallpaperHelper.saveCurrentForLiveWallpaper(result)
             if (prefs.liveWallpaperEnabled) {
+                prefs.liveMusicPlaying = true
                 sendBroadcast(Intent(MusicWallpaperService.ACTION_REFRESH).setPackage(packageName))
                 applied = true
                 broadcastWallpaperApplied("Live wallpaper updated")
@@ -174,9 +196,7 @@ class MediaNotificationListenerService : NotificationListenerService() {
             if (!uriText.isNullOrBlank()) {
                 contentResolver.openInputStream(Uri.parse(uriText)).use { input ->
                     if (input != null) {
-                        val opts = BitmapFactory.Options().apply {
-                            inPreferredConfig = Bitmap.Config.RGB_565
-                        }
+                        val opts = BitmapFactory.Options().apply { inPreferredConfig = Bitmap.Config.RGB_565 }
                         BitmapFactory.decodeStream(input, null, opts)?.let { bmp -> downsampleArtwork(bmp) }
                     } else null
                 }
