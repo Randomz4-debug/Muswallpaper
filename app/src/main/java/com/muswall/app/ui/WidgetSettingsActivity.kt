@@ -47,10 +47,7 @@ class WidgetSettingsActivity : AppCompatActivity() {
         bindSeek(R.id.widgetArtworkSize, 32, 140, prefs.widgetArtworkSize) { prefs.widgetArtworkSize = it }
         bindSeek(R.id.widgetCornerRadius, 0, 50, prefs.widgetCornerRadius) { prefs.widgetCornerRadius = it }
         bindSeek(R.id.widgetPadding, 0, 30, prefs.widgetPadding) { prefs.widgetPadding = it }
-        findViewById<TextView>(R.id.widgetLayoutChoice).apply {
-            text = if (prefs.widgetLayout == 0) "Horizontal" else "Compact"
-            setOnClickListener { prefs.widgetLayout = if (prefs.widgetLayout == 0) 1 else 0; text = if (prefs.widgetLayout == 0) "Horizontal" else "Compact"; notifyWidgets() }
-        }
+        findViewById<TextView>(R.id.widgetLayoutChoice).apply { text = if (prefs.widgetLayout == 0) "Horizontal" else "Compact"; setOnClickListener { prefs.widgetLayout = if (prefs.widgetLayout == 0) 1 else 0; text = if (prefs.widgetLayout == 0) "Horizontal" else "Compact"; notifyWidgets() } }
         findViewById<EditText>(R.id.widgetCustomText).setText(prefs.widgetCustomText)
         findViewById<EditText>(R.id.widgetEmptyText).setText(prefs.widgetEmptyTitle)
         bindColor(R.id.widgetTextColor, R.id.widgetTextColorSwatch, "Title / custom text", { prefs.widgetTextColor }, { prefs.widgetTextColor = it })
@@ -61,10 +58,10 @@ class WidgetSettingsActivity : AppCompatActivity() {
         findViewById<TextView>(R.id.widgetSave).setOnClickListener {
             prefs.widgetCustomText = findViewById<EditText>(R.id.widgetCustomText).text.toString().ifBlank { "MusWall" }
             prefs.widgetEmptyTitle = findViewById<EditText>(R.id.widgetEmptyText).text.toString().ifBlank { "No music playing" }
-            saveColor(R.id.widgetTextColor, { prefs.widgetTextColor = it })
-            saveColor(R.id.widgetSecondaryColor, { prefs.widgetSecondaryColor = it })
-            saveColor(R.id.widgetBackgroundColor, { prefs.widgetBackgroundColor = it })
-            saveColor(R.id.widgetBarColor, { prefs.widgetBarColor = it })
+            saveColor(R.id.widgetTextColor, { prefs.widgetTextColor = it }, "#FFFFFF")
+            saveColor(R.id.widgetSecondaryColor, { prefs.widgetSecondaryColor = it }, "#C7C7D0")
+            saveColor(R.id.widgetBackgroundColor, { prefs.widgetBackgroundColor = it }, "#17151F")
+            saveColor(R.id.widgetBarColor, { prefs.widgetBarColor = it }, "#FFFFFF")
             prefs.widgetCustomTimeLabel = findViewById<EditText>(R.id.widgetTimeLabel).text.toString().ifBlank { "Now Playing" }
             notifyWidgets()
             setResult(Activity.RESULT_OK, Intent().putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId))
@@ -76,33 +73,24 @@ class WidgetSettingsActivity : AppCompatActivity() {
     private fun bindSeek(id: Int, min: Int, max: Int, value: Int, save: (Int) -> Unit) { findViewById<SeekBar>(id).apply { this.max = max - min; progress = (value - min).coerceIn(0, max - min); setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener { override fun onProgressChanged(s: SeekBar?, p: Int, fromUser: Boolean) { if (fromUser) { save(p + min); notifyWidgets() } }; override fun onStartTrackingTouch(s: SeekBar?) {}; override fun onStopTrackingTouch(s: SeekBar?) {} }) } }
 
     private fun bindColor(editId: Int, swatchId: Int, title: String, get: () -> String, save: (String) -> Unit) {
-        val edit = findViewById<EditText>(editId)
-        val swatch = findViewById<TextView>(swatchId)
-        edit.setText(get())
-        updateSwatch(swatch, get())
-        val open = View.OnClickListener { showColorPalette(title, edit, swatch, save) }
-        swatch.setOnClickListener(open)
+        val edit = findViewById<EditText>(editId); val swatch = findViewById<TextView>(swatchId); edit.setText(get()); updateSwatch(swatch, get())
+        swatch.setOnClickListener { showColorPalette(title, edit, swatch, save) }
         edit.setOnFocusChangeListener { _, hasFocus -> if (!hasFocus) { val c = validColor(edit.text.toString(), get()); edit.setText(c); save(c); updateSwatch(swatch, c); notifyWidgets() } }
     }
 
-    private fun saveColor(editId: Int, save: (String) -> Unit) {
-        val edit = findViewById<EditText>(editId)
-        val fallback = when(editId) { R.id.widgetTextColor -> "#FFFFFF"; R.id.widgetSecondaryColor -> "#C7C7D0"; R.id.widgetBackgroundColor -> "#17151F"; else -> "#FFFFFF" }
-        val c = validColor(edit.text.toString(), fallback); edit.setText(c); save(c)
-    }
+    private fun saveColor(editId: Int, save: (String) -> Unit, fallback: String) { val edit = findViewById<EditText>(editId); val c = validColor(edit.text.toString(), fallback); edit.setText(c); save(c) }
 
     private fun showColorPalette(title: String, edit: EditText, swatch: TextView, save: (String) -> Unit) {
-        val box = GridLayout(this).apply { columnCount = 4; rowCount = 4; setPadding(18, 12, 18, 8) }
+        val box = GridLayout(this).apply { columnCount = 4; setPadding(18, 12, 18, 8) }
         palette.forEach { hex ->
-            val chip = TextView(this).apply {
-                text = "●"; textSize = 30f; gravity = Gravity.CENTER; setTextColor(Color.parseColor(hex)); setPadding(6, 6, 6, 6)
-                setOnClickListener { edit.setText(hex); save(hex); updateSwatch(swatch, hex); notifyWidgets(); dialog.dismiss() }
-            }
+            val chip = TextView(this).apply { text = "●"; textSize = 30f; gravity = Gravity.CENTER; setTextColor(Color.parseColor(hex)); setPadding(6, 6, 6, 6) }
+            chip.setOnClickListener { edit.setText(hex); save(hex); updateSwatch(swatch, hex); notifyWidgets(); dialog.dismiss() }
             box.addView(chip, GridLayout.LayoutParams().apply { width = 68; height = 58; setMargins(2, 2, 2, 2) })
         }
         val custom = EditText(this).apply { hint = "#RRGGBB"; setSingleLine(true); setText(edit.text.toString()) }
         val container = android.widget.LinearLayout(this).apply { orientation = android.widget.LinearLayout.VERTICAL; setPadding(16, 0, 16, 0); addView(box); addView(custom) }
-        val dialog = AlertDialog.Builder(this).setTitle(title).setView(container).setNegativeButton("Cancel", null).setPositiveButton("Apply", null).create()
+        lateinit var dialog: AlertDialog
+        dialog = AlertDialog.Builder(this).setTitle(title).setView(container).setNegativeButton("Cancel", null).setPositiveButton("Apply", null).create()
         dialog.setOnShowListener { dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener { val c=validColor(custom.text.toString(),edit.text.toString()); edit.setText(c); save(c); updateSwatch(swatch,c); notifyWidgets(); dialog.dismiss() } }
         dialog.show()
     }
