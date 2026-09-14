@@ -56,14 +56,12 @@ class MediaNotificationListenerService : NotificationListenerService() {
     private val timelineRunnable = object : Runnable {
         override fun run() {
             if (!playing) return
-            val position = activeController?.playbackState?.position?.coerceAtLeast(0L) ?: prefs.lyricsPosition
+            val controller = activeController
+            val state = controller?.playbackState
+            val position = state?.position?.coerceAtLeast(0L) ?: prefs.lyricsPosition
             prefs.lyricsPosition = position
-            sendBroadcast(
-                Intent(ACTION_LIVE_TICK)
-                    .setPackage(packageName)
-                    .putExtra(EXTRA_POSITION_MS, position)
-            )
-            timelineHandler.postDelayed(this, 250L)
+            sendBroadcast(Intent(ACTION_LIVE_TICK).setPackage(packageName).putExtra(EXTRA_POSITION_MS, position))
+            timelineHandler.postDelayed(this, 150L)
         }
     }
 
@@ -175,11 +173,7 @@ class MediaNotificationListenerService : NotificationListenerService() {
 
     private fun refreshActiveSessions() {
         try {
-            selectBestController(
-                sessionManager?.getActiveSessions(
-                    ComponentName(this, MediaNotificationListenerService::class.java)
-                )
-            )
+            selectBestController(sessionManager?.getActiveSessions(ComponentName(this, MediaNotificationListenerService::class.java)))
         } catch (t: Throwable) {
             Log.w("MusWallMedia", "Active session refresh failed", t)
         }
@@ -234,67 +228,79 @@ class MediaNotificationListenerService : NotificationListenerService() {
             if (!was) activeController?.metadata?.let { handleMetadata(it, true) }
         } else {
             timelineHandler.removeCallbacks(timelineRunnable)
+            generation.incrementAndGet()
             generationJob?.cancel()
             lyricsJob?.cancel()
             prefs.liveMusicPlaying = false
-            try { wallpaperHelper.restoreOriginalLock() } catch (t: Throwable) {
-                Log.w("MusWallMedia", "Failed to restore original lock wallpaper", t)
+            // WallpaperHelper.restoreOriginalLock() is suspend, so run it off the callback thread.
+            scope.launch {
+                try {
+                    wallpaperHelper.restoreOriginalLock()
+                } catch (t: Throwable) {
+                    Log.w("MusWallMedia", "Failed to restore original lock wallpaper", t)
+                }
+                sendBroadcast(Intent(ACTION_LIVE_TICK).setPackage(packageName).putExtra(EXTRA_POSITION_MS, prefs.lyricsPosition))
+                refreshLive()
+                broadcastWallpaperApplied("Music stopped • original wallpaper restored")
             }
-            sendBroadcast(
-                Intent(ACTION_LIVE_TICK)
-                    .setPackage(packageName)
-                    .putExtra(EXTRA_POSITION_MS, prefs.lyricsPosition)
-            )
-            refreshLive()
-            broadcastWallpaperApplied("Music paused • original wallpaper restored")
         }
         sendBroadcast(Intent(ACTION_WIDGET_CHANGED).setPackage(packageName))
     }
 
-    private fun handleMetadata(metadata:MediaMetadata?,force:Boolean=false){
-        if(metadata==null)return
-        val title=metadata.getString(MediaMetadata.METADATA_KEY_TITLE)?.trim().orEmpty().ifEmpty{"Unknown title"}
-        val artist=metadata.getString(MediaMetadata.METADATA_KEY_ARTIST)?.trim().orEmpty().ifEmpty{"Unknown artist"}
-        prefs.lastTrackTitle=title
-        prefs.lastArtist=artist
-        prefs.lastDuration=metadata.getLong(MediaMetadata.METADATA_KEY_DURATION).coerceAtLeast(0L)
-        broadcastTrack(title,artist)
-        val artUri=metadata.getString(MediaMetadata.METADATA_KEY_ALBUM_ART_URI)?:metadata.getString(MediaMetadata.METADATA_KEY_ART_URI).orEmpty()
-        val mediaId=metadata.getString(MediaMetadata.METADATA_KEY_MEDIA_ID).orEmpty()
-        val id=mediaId+"|"+title+"|"+artist+"|"+artUri
-        if(!force&&id==currentTrackId)return
-        currentTrackId=id
-        prefs.lyricsPosition=activeController?.playbackState?.position?.coerceAtLeast(0L)?:prefs.lyricsPosition
-        if(!prefs.isAutoEnabled||!playing||prefs.wallpaperMode!=PreferencesManager.MODE_MUSIC)return
-        if(!prefs.liveWallpaperEnabled){broadcastWallpaperApplied("Music detected • enable MusWall Live Wallpaper once");return}
-        val token=generation.incrementAndGet()
+    private fun handleMetadata(metadata: MediaMetadata?, force: Boolean = false) {
+        if (metadata == null) return
+        val title = metadata.getString(MediaMetadata.METADATA_KEY_TITLE)?.trim().orEmpty().ifEmpty { "Unknown title" }
+        val artist = metadata.getString(MediaMetadata.METADATA_KEY_ARTIST)?.trim().orEmpty().ifEmpty { "Unknown artist" }
+        prefs.lastTrackTitle = title
+        prefs.lastArtist = artist
+        prefs.lastDuration = metadata.getLong(MediaMetadata.METADATA_KEY_DURATION).coerceAtLeast(0L)
+        broadcastTrack(title, artist)
+        val artUri = metadata.getString(MediaMetadata.METADATA_KEY_ALBUM_ART_URI) ?: metadata.getString(MediaMetadata.METADATA_KEY_ART_URI).orEmpty()
+        val mediaId = metadata.getString(MediaMetadata.METADATA_KEY_MEDIA_ID).orEmpty()
+        val id = mediaId + "|" + title + "|" + artist + "|" + artUri
+        if (!force && id == currentTrackId) return
+        currentTrackId = id
+        prefs.lyricsPosition = activeController?.playbackState?.position?.coerceAtLeast(0L) ?: prefs.lyricsPosition
+        if (!prefs.isAutoEnabled || !playing || prefs.wallpaperMode != PreferencesManager.MODE_MUSIC) return
+        if (!prefs.liveWallpaperEnabled) {
+            broadcastWallpaperApplied("Music detected • enable MusWall Live Wallpaper once")
+            return
+        }
+        val token = generation.incrementAndGet()
         generationJob?.cancel()
-        generationJob=scope.launch(Dispatchers.Default){
-            val art=extractArtwork(metadata)
-            try{
-                val immediate=findImmediateLyrics(metadata)
-                if(prefs.showLyrics){prefs.lastLyrics=immediate?:"[00:00.00] Loading lyrics…";refreshLive()}
-                if(art!=null)renderAndSendToLiveWallpaper(art,token,prefs.lastLyrics)else refreshLive()
-                if(prefs.showLyrics){
-                    val resolved=if(immediate!=null)immediate else resolveLyrics(metadata,title,artist)
-                    if(token==generation.get()&&playing){
-                        if(resolved.isNotBlank())prefs.lastLyrics=translateIfNeeded(resolved)
-                        else if(prefs.lastLyrics.contains("Loading lyrics"))prefs.lastLyrics="Lyrics unavailable for this track"
+        generationJob = scope.launch(Dispatchers.Default) {
+            val art = extractArtwork(metadata)
+            try {
+                val immediate = findImmediateLyrics(metadata)
+                if (prefs.showLyrics) {
+                    prefs.lastLyrics = immediate ?: "[00:00.00] Loading lyrics…"
+                    refreshLive()
+                }
+                if (art != null) renderAndSendToLiveWallpaper(art, token, prefs.lastLyrics) else refreshLive()
+                if (prefs.showLyrics) {
+                    val resolved = if (immediate != null) immediate else resolveLyrics(metadata, title, artist)
+                    if (token == generation.get() && playing) {
+                        if (resolved.isNotBlank()) prefs.lastLyrics = translateIfNeeded(resolved)
+                        else if (prefs.lastLyrics.contains("Loading lyrics")) prefs.lastLyrics = "[00:00.00] Lyrics unavailable for this track"
                         refreshLive()
                     }
                 }
-            }finally{art?.let{if(!it.isRecycled)it.recycle()}}
+            } finally {
+                art?.let { if (!it.isRecycled) it.recycle() }
+            }
         }
     }
-    private fun findImmediateLyrics(metadata:MediaMetadata):String?{
-        val direct=metadata.getString("android.media.metadata.LYRICS")?.trim().orEmpty()
-        if(hasLrcTimestamps(direct))return direct
-        for(key in metadata.keySet()){
-            val value=metadata.getString(key)?.trim().orEmpty()
-            if(key.contains("lyric",true)&&hasLrcTimestamps(value))return value
+
+    private fun findImmediateLyrics(metadata: MediaMetadata): String? {
+        val direct = metadata.getString("android.media.metadata.LYRICS")?.trim().orEmpty()
+        if (hasLrcTimestamps(direct)) return direct
+        for (key in metadata.keySet()) {
+            val value = metadata.getString(key)?.trim().orEmpty()
+            if (key.contains("lyric", true) && hasLrcTimestamps(value)) return value
         }
         return null
     }
+
     private fun refreshLive() {
         sendBroadcast(Intent(MusicWallpaperService.ACTION_REFRESH).setPackage(packageName))
         sendBroadcast(Intent(ACTION_WIDGET_CHANGED).setPackage(packageName))
@@ -302,9 +308,7 @@ class MediaNotificationListenerService : NotificationListenerService() {
 
     private fun isOurLockLiveWallpaper(): Boolean = try {
         if (android.os.Build.VERSION.SDK_INT < 34) false
-        else WallpaperManager.getInstance(this)
-            .getWallpaperInfo(WallpaperManager.FLAG_LOCK)
-            ?.component == ComponentName(this, MusicWallpaperService::class.java)
+        else WallpaperManager.getInstance(this).getWallpaperInfo(WallpaperManager.FLAG_LOCK)?.component == ComponentName(this, MusicWallpaperService::class.java)
     } catch (_: Throwable) { false }
 
     private suspend fun renderAndSendToLiveWallpaper(artwork: Bitmap, token: Long, lyrics: String) {
@@ -313,155 +317,104 @@ class MediaNotificationListenerService : NotificationListenerService() {
         val targetW = (dm.widthPixels * .70f).toInt().coerceIn(480, 1080)
         val targetH = (dm.heightPixels * .70f).toInt().coerceIn(900, 1920)
         wallpaperHelper.saveLastArtwork(artwork)
-        val result = PythonBridge.generateWallpaper(
-            artwork,
-            targetW,
-            targetH,
-            prefs.blurRadius.toFloat(),
-            prefs.darkness / 100f,
-            prefs.artScale / 100f,
-            42,
-            true,
-            prefs.effect,
-            prefs.blurType,
-            prefs.coverHeight,
-            prefs.coverOffset,
-            prefs.transitionHeight,
-            false,
-            "",
-            prefs.photoSource,
-            ""
-        ) ?: return
-
+        val result = PythonBridge.generateWallpaper(artwork, targetW, targetH, prefs.blurRadius.toFloat(), prefs.darkness / 100f, prefs.artScale / 100f, 42, true, prefs.effect, prefs.blurType, prefs.coverHeight, prefs.coverOffset, prefs.transitionHeight, false, "", prefs.photoSource, "") ?: return
         try {
             if (token != generation.get() || !playing || !prefs.liveWallpaperEnabled) return
             wallpaperHelper.saveCurrentForLiveWallpaper(result)
             if (!isOurLockLiveWallpaper()) wallpaperHelper.applyLockFrame(result)
             prefs.liveMusicPlaying = true
             refreshLive()
-            broadcastWallpaperApplied(
-                if (prefs.showLyrics && lyrics.isNotBlank()) "Live wallpaper + lyrics updated"
-                else "Live wallpaper updated"
-            )
+            broadcastWallpaperApplied(if (prefs.showLyrics && lyrics.isNotBlank()) "Live wallpaper + lyrics updated" else "Live wallpaper updated")
         } finally {
             if (!result.isRecycled) result.recycle()
         }
     }
 
-    private fun hasLrcTimestamps(text: String): Boolean =
-        Regex("\\[\\d{1,3}:\\d{2}(?:[.:]\\d{1,3})?\\]").containsMatchIn(text)
+    private fun hasLrcTimestamps(text: String): Boolean = Regex("\\[\\d{1,3}:\\d{2}(?:[.:]\\d{1,3})?\\]").containsMatchIn(text)
 
     private fun resolveLyrics(metadata: MediaMetadata, title: String, artist: String): String {
+        // Always prefer timestamped lyrics so the overlay can follow the exact playback position.
         val direct = metadata.getString("android.media.metadata.LYRICS")?.trim().orEmpty()
-        if (direct.isNotBlank()) return direct
+        if (hasLrcTimestamps(direct)) return direct
+        for (key in metadata.keySet()) {
+            if (!key.contains("lyric", ignoreCase = true)) continue
+            val value = metadata.getString(key)?.trim().orEmpty()
+            if (hasLrcTimestamps(value)) return value
+        }
 
+        // LRCLIB: exact match first, then search. Both attempts prefer syncedLyrics.
+        fetchLyricsFromLrcLib(metadata, title, artist, syncedOnly = true)?.takeIf { it.isNotBlank() }?.let { return it }
+
+        // Some players expose plain lyrics directly. Keep them as a last-resort fallback rather than
+        // returning them before the synced LRCLIB lookup.
+        if (direct.isNotBlank()) return direct
         for (key in metadata.keySet()) {
             if (!key.contains("lyric", ignoreCase = true)) continue
             val value = metadata.getString(key)?.trim().orEmpty()
             if (value.isNotBlank()) return value
         }
 
-        fetchLyricsFromLrcLib(metadata, title, artist, syncedOnly = true)
-            ?.takeIf { it.isNotBlank() }
-            ?.let { return it }
-
+        // Final LRCLIB request can return plain lyrics if no synchronized copy exists.
         return fetchLyricsFromLrcLib(metadata, title, artist, syncedOnly = false).orEmpty()
     }
 
-    private fun translateIfNeeded(raw:String):String{
-        val lang=prefs.lyricsLanguage.trim().lowercase()
-        if(lang.isBlank()||lang=="original"||lang=="auto")return raw
-        return try{
-            val lines=raw.replace("\r","").split('\n')
-            val out=ArrayList<String>()
-            var i=0
-            while(i<lines.size){
-                val chunkLines=ArrayList<String>()
-                var chars=0
-                while(i<lines.size&&chars+lines[i].length<420){chunkLines+=lines[i];chars+=lines[i].length+1;i++}
-                val prefixes=chunkLines.map{Regex("^(\\s*\\[[^]]+\\]\\s*)").find(it)?.value?:""}
-                val texts=chunkLines.mapIndexed{idx,line->line.removePrefix(prefixes[idx])}
-                val translated=translateChunk(texts.joinToString("\n"),lang).split('\n')
-                if(translated.size==texts.size)chunkLines.forEachIndexed{idx,_->out+=prefixes[idx]+translated[idx]}else out+=chunkLines
+    private fun translateIfNeeded(raw: String): String {
+        val lang = prefs.lyricsLanguage.trim().lowercase()
+        if (lang.isBlank() || lang == "original" || lang == "auto") return raw
+        return try {
+            val lines = raw.replace("\r", "").split('\n')
+            val out = ArrayList<String>()
+            var i = 0
+            while (i < lines.size) {
+                val chunkLines = ArrayList<String>()
+                var chars = 0
+                while (i < lines.size && chars + lines[i].length < 420) { chunkLines += lines[i]; chars += lines[i].length + 1; i++ }
+                val prefixes = chunkLines.map { Regex("^(\\s*\\[[^]]+\\]\\s*)").find(it)?.value ?: "" }
+                val texts = chunkLines.mapIndexed { idx, line -> line.removePrefix(prefixes[idx]) }
+                val translated = translateChunk(texts.joinToString("\n"), lang).split('\n')
+                if (translated.size == texts.size) chunkLines.forEachIndexed { idx, _ -> out += prefixes[idx] + translated[idx] } else out += chunkLines
             }
             out.joinToString("\n")
-        }catch(_:Throwable){raw}
+        } catch (_: Throwable) { raw }
     }
-    private fun translateChunk(chunk:String,language:String):String{
-        return try{
-            val q=URLEncoder.encode(chunk,"UTF-8")
-            val target=URLEncoder.encode(language,"UTF-8")
-            val url=URL("https://api.mymemory.translated.net/get?q="+q+"&langpair=auto%7C"+target)
-            val c=url.openConnection() as HttpURLConnection
-            c.requestMethod="GET";c.connectTimeout=4000;c.readTimeout=5000;c.setRequestProperty("User-Agent","MusWall/4.0")
-            try{
-                if(c.responseCode !in 200..299)return chunk
-                JSONObject(c.inputStream.bufferedReader().use{it.readText()}).optJSONObject("responseData")?.optString("translatedText")?.takeIf{it.isNotBlank()}?:chunk
-            }finally{c.disconnect()}
-        }catch(_:Throwable){chunk}
+
+    private fun translateChunk(chunk: String, language: String): String {
+        return try {
+            val q = URLEncoder.encode(chunk, "UTF-8")
+            val target = URLEncoder.encode(language, "UTF-8")
+            val url = URL("https://api.mymemory.translated.net/get?q=" + q + "&langpair=auto%7C" + target)
+            val c = url.openConnection() as HttpURLConnection
+            c.requestMethod = "GET"; c.connectTimeout = 4000; c.readTimeout = 5000; c.setRequestProperty("User-Agent", "MusWall/4.0")
+            try {
+                if (c.responseCode !in 200..299) return chunk
+                JSONObject(c.inputStream.bufferedReader().use { it.readText() }).optJSONObject("responseData")?.optString("translatedText")?.takeIf { it.isNotBlank() } ?: chunk
+            } finally { c.disconnect() }
+        } catch (_: Throwable) { chunk }
     }
-    private fun fetchLyricsFromLrcLib(
-        metadata: MediaMetadata,
-        title: String,
-        artist: String,
-        syncedOnly: Boolean
-    ): String? {
+
+    private fun fetchLyricsFromLrcLib(metadata: MediaMetadata, title: String, artist: String, syncedOnly: Boolean): String? {
         if (title.isBlank() || artist.isBlank()) return null
         val duration = metadata.getLong(MediaMetadata.METADATA_KEY_DURATION).coerceAtLeast(0L)
-
-        // Try the exact endpoint first because it is faster and usually returns the best match.
         val exact = tryLrcLibGet(metadata, title, artist, duration, syncedOnly)
         if (!exact.isNullOrBlank()) return exact
-
-        // Duration mismatches are common with edited files. Fall back to LRCLIB search.
         return tryLrcLibSearch(title, artist, syncedOnly)
     }
 
-    private fun tryLrcLibGet(
-        metadata: MediaMetadata,
-        title: String,
-        artist: String,
-        duration: Long,
-        syncedOnly: Boolean
-    ): String? {
+    private fun tryLrcLibGet(metadata: MediaMetadata, title: String, artist: String, duration: Long, syncedOnly: Boolean): String? {
         return try {
-            val builder = Uri.Builder()
-                .scheme("https")
-                .authority("lrclib.net")
-                .appendPath("api")
-                .appendPath("get")
-                .appendQueryParameter("track_name", title)
-                .appendQueryParameter("artist_name", artist)
-
-            metadata.getString(MediaMetadata.METADATA_KEY_ALBUM)
-                ?.trim()
-                ?.takeIf { it.isNotBlank() }
-                ?.let { builder.appendQueryParameter("album_name", it) }
+            val builder = Uri.Builder().scheme("https").authority("lrclib.net").appendPath("api").appendPath("get").appendQueryParameter("track_name", title).appendQueryParameter("artist_name", artist)
+            metadata.getString(MediaMetadata.METADATA_KEY_ALBUM)?.trim()?.takeIf { it.isNotBlank() }?.let { builder.appendQueryParameter("album_name", it) }
             if (duration > 0) builder.appendQueryParameter("duration", (duration / 1000L).toString())
-
             val connection = (URL(builder.build().toString()).openConnection() as HttpURLConnection).apply {
-                requestMethod = "GET"
-                connectTimeout = 3500
-                readTimeout = 5000
-                setRequestProperty("Accept", "application/json")
-                setRequestProperty("User-Agent", "MusWall/4.0")
+                requestMethod = "GET"; connectTimeout = 3500; readTimeout = 5000; setRequestProperty("Accept", "application/json"); setRequestProperty("User-Agent", "MusWall/4.0")
             }
             try {
                 if (connection.responseCode !in 200..299) return null
                 val root = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
-                if (syncedOnly) {
-                    root.optString("syncedLyrics").trim().takeIf { it.isNotBlank() }
-                } else {
-                    root.optString("syncedLyrics").trim().takeIf { it.isNotBlank() }
-                        ?: root.optString("plainLyrics").trim().takeIf { it.isNotBlank() }
-                }
-            } finally {
-                connection.disconnect()
-            }
-        } catch (t: Throwable) {
-            Log.d("MusWallLyrics", "LRCLIB exact lookup failed", t)
-            null
-        }
+                if (syncedOnly) root.optString("syncedLyrics").trim().takeIf { it.isNotBlank() }
+                else root.optString("syncedLyrics").trim().takeIf { it.isNotBlank() } ?: root.optString("plainLyrics").trim().takeIf { it.isNotBlank() }
+            } finally { connection.disconnect() }
+        } catch (t: Throwable) { Log.d("MusWallLyrics", "LRCLIB exact lookup failed", t); null }
     }
 
     private fun tryLrcLibSearch(title: String, artist: String, syncedOnly: Boolean): String? {
@@ -469,39 +422,29 @@ class MediaNotificationListenerService : NotificationListenerService() {
             val query = URLEncoder.encode("$title $artist", "UTF-8")
             val url = URL("https://lrclib.net/api/search?q=$query")
             val connection = (url.openConnection() as HttpURLConnection).apply {
-                requestMethod = "GET"
-                connectTimeout = 3500
-                readTimeout = 6000
-                setRequestProperty("Accept", "application/json")
-                setRequestProperty("User-Agent", "MusWall/4.0")
+                requestMethod = "GET"; connectTimeout = 3500; readTimeout = 6000; setRequestProperty("Accept", "application/json"); setRequestProperty("User-Agent", "MusWall/4.0")
             }
             try {
                 if (connection.responseCode !in 200..299) return null
                 val array = org.json.JSONArray(connection.inputStream.bufferedReader().use { it.readText() })
+                var plainFallback: String? = null
                 for (i in 0 until array.length()) {
                     val item = array.optJSONObject(i) ?: continue
                     val synced = item.optString("syncedLyrics").trim()
                     val plain = item.optString("plainLyrics").trim()
-                    if (syncedOnly && synced.isNotBlank()) return synced
-                    if (!syncedOnly && synced.isNotBlank()) return synced
-                    if (!syncedOnly && plain.isNotBlank()) return plain
+                    if (synced.isNotBlank()) return synced
+                    if (plainFallback == null && plain.isNotBlank()) plainFallback = plain
                 }
-                null
-            } finally {
-                connection.disconnect()
-            }
-        } catch (t: Throwable) {
-            Log.d("MusWallLyrics", "LRCLIB search failed", t)
-            null
-        }
+                if (!syncedOnly) plainFallback else null
+            } finally { connection.disconnect() }
+        } catch (t: Throwable) { Log.d("MusWallLyrics", "LRCLIB search failed", t); null }
     }
 
     private fun extractArtwork(metadata: MediaMetadata): Bitmap? {
         return try {
             metadata.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART)?.let { downsampleArtwork(it) }?.let { return it }
             metadata.getBitmap(MediaMetadata.METADATA_KEY_ART)?.let { downsampleArtwork(it) }?.let { return it }
-            val uriText = metadata.getString(MediaMetadata.METADATA_KEY_ALBUM_ART_URI)
-                ?: metadata.getString(MediaMetadata.METADATA_KEY_ART_URI)
+            val uriText = metadata.getString(MediaMetadata.METADATA_KEY_ALBUM_ART_URI) ?: metadata.getString(MediaMetadata.METADATA_KEY_ART_URI)
             if (uriText.isNullOrBlank()) return null
             contentResolver.openInputStream(Uri.parse(uriText)).use { input ->
                 if (input == null) return@use null
@@ -510,72 +453,36 @@ class MediaNotificationListenerService : NotificationListenerService() {
                 if (output !== decoded && !decoded.isRecycled) decoded.recycle()
                 output
             }
-        } catch (t: Throwable) {
-            Log.w("MusWallMedia", "Artwork extraction failed", t)
-            null
-        }
+        } catch (t: Throwable) { Log.w("MusWallMedia", "Artwork extraction failed", t); null }
     }
 
     private fun downsampleArtwork(bitmap: Bitmap): Bitmap? {
         return try {
-            val max = 900
-            val source = bitmap.copy(Bitmap.Config.ARGB_8888, false) ?: return null
-            if (source.width <= max && source.height <= max) return source
-            val scale = minOf(max.toFloat() / source.width, max.toFloat() / source.height)
-            val width = (source.width * scale).toInt().coerceAtLeast(1)
-            val height = (source.height * scale).toInt().coerceAtLeast(1)
-            Bitmap.createScaledBitmap(source, width, height, true).also {
-                if (it !== source && !source.isRecycled) source.recycle()
-            }
-        } catch (_: Throwable) {
-            null
-        }
+            val max = 1600
+            val scale = minOf(1f, max.toFloat() / maxOf(bitmap.width, bitmap.height))
+            if (scale >= 0.999f) bitmap else Bitmap.createScaledBitmap(bitmap, (bitmap.width * scale).toInt().coerceAtLeast(1), (bitmap.height * scale).toInt().coerceAtLeast(1), true)
+        } catch (_: Throwable) { bitmap }
     }
 
     private fun broadcastTrack(title: String, artist: String) {
-        sendBroadcast(
-            Intent(ACTION_TRACK_CHANGED)
-                .setPackage(packageName)
-                .putExtra(EXTRA_TRACK_TITLE, title)
-                .putExtra(EXTRA_ARTIST, artist)
-        )
+        sendBroadcast(Intent(ACTION_TRACK_CHANGED).setPackage(packageName).putExtra(EXTRA_TRACK_TITLE, title).putExtra(EXTRA_ARTIST, artist))
     }
 
     private fun broadcastPlaybackState(isPlaying: Boolean) {
-        sendBroadcast(
-            Intent(ACTION_PLAYBACK_STATE_CHANGED)
-                .setPackage(packageName)
-                .putExtra(EXTRA_IS_PLAYING, isPlaying)
-        )
+        sendBroadcast(Intent(ACTION_PLAYBACK_STATE_CHANGED).setPackage(packageName).putExtra(EXTRA_IS_PLAYING, isPlaying))
     }
 
     private fun broadcastWallpaperApplied(message: String) {
-        sendBroadcast(
-            Intent(ACTION_WALLPAPER_APPLIED)
-                .setPackage(packageName)
-                .putExtra(EXTRA_STATUS_MESSAGE, message)
-        )
-    }
-
-    override fun onNotificationPosted(sbn: android.service.notification.StatusBarNotification?) {
-        refreshActiveSessions()
-    }
-
-    override fun onNotificationRemoved(sbn: android.service.notification.StatusBarNotification?) {
-        refreshActiveSessions()
+        sendBroadcast(Intent(ACTION_WALLPAPER_APPLIED).setPackage(packageName).putExtra(EXTRA_STATUS_MESSAGE, message))
     }
 
     override fun onDestroy() {
-        generation.incrementAndGet()
-        generationJob?.cancel()
-        lyricsJob?.cancel()
-        timelineHandler.removeCallbacksAndMessages(null)
+        timelineHandler.removeCallbacks(timelineRunnable)
+        try { activeController?.unregisterCallback(callback) } catch (_: Throwable) {}
+        try { sessionManager?.removeOnActiveSessionsChangedListener(sessionsListener) } catch (_: Throwable) {}
         try { sharedPrefs.unregisterOnSharedPreferenceChangeListener(preferenceListener) } catch (_: Throwable) {}
         try { unregisterReceiver(widgetControlReceiver) } catch (_: Throwable) {}
         try { unregisterReceiver(settingsReceiver) } catch (_: Throwable) {}
-        try { sessionManager?.removeOnActiveSessionsChangedListener(sessionsListener) } catch (_: Throwable) {}
-        try { activeController?.unregisterCallback(callback) } catch (_: Throwable) {}
-        activeController = null
         scope.cancel()
         super.onDestroy()
     }
