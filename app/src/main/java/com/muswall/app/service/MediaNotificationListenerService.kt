@@ -46,6 +46,7 @@ class MediaNotificationListenerService : NotificationListenerService() {
         }
 
         override fun onMetadataChanged(metadata: MediaMetadata?) {
+            // A real metadata event means the track/artwork may have changed.
             handleMetadata(metadata, force = true)
         }
 
@@ -102,8 +103,10 @@ class MediaNotificationListenerService : NotificationListenerService() {
 
     private fun switchController(controller: MediaController?) {
         if (controller?.sessionToken == activeController?.sessionToken) {
+            // Refresh state without treating every notification/session refresh as
+            // a new track. Playback and metadata callbacks handle actual changes.
             controller?.playbackState?.let { handlePlayback(it) }
-            controller?.metadata?.let { handleMetadata(it, force = true) }
+            controller?.metadata?.let { handleMetadata(it, force = false) }
             if (controller == null) handlePlayback(null)
             return
         }
@@ -146,8 +149,9 @@ class MediaNotificationListenerService : NotificationListenerService() {
             return
         }
 
-        // Resume/play events are handled immediately, even if metadata did not change.
-        activeController?.metadata?.let { handleMetadata(it, force = true) }
+        // Only a transition from stopped -> playing needs a forced metadata read.
+        // Position updates while a song is playing must NOT rerender the wallpaper.
+        if (!was) activeController?.metadata?.let { handleMetadata(it, force = true) }
     }
 
     private fun handleMetadata(metadata: MediaMetadata?, force: Boolean = false) {
@@ -160,14 +164,15 @@ class MediaNotificationListenerService : NotificationListenerService() {
 
         val artUri = metadata.getString(MediaMetadata.METADATA_KEY_ALBUM_ART_URI)
             ?: metadata.getString(MediaMetadata.METADATA_KEY_ART_URI).orEmpty()
-        val id = "$title\u0000$artist\u0000$artUri"
+        val mediaId = metadata.getString(MediaMetadata.METADATA_KEY_MEDIA_ID).orEmpty()
+        val id = "$mediaId\u0000$title\u0000$artist\u0000$artUri"
         if (!force && id == currentTrackId) return
         currentTrackId = id
 
         if (!prefs.isAutoEnabled || !playing || prefs.wallpaperMode != PreferencesManager.MODE_MUSIC) return
 
-        // IMPORTANT: Music mode never calls WallpaperManager.setBitmap().
-        // The generated image is handed to the already-installed live wallpaper.
+        // Music mode has exactly one wallpaper path: the installed live wallpaper.
+        // WallpaperManager.setBitmap() is deliberately never called here.
         if (!prefs.liveWallpaperEnabled) {
             broadcastWallpaperApplied("Music detected • enable MusWall Live Wallpaper once")
             return
