@@ -28,9 +28,9 @@ class MusicWidgetProvider : AppWidgetProvider() {
         when (intent.action) {
             ACTION_WIDGET_PLAY, ACTION_WIDGET_NEXT, ACTION_WIDGET_PREV -> {
                 val action = when (intent.action) {
-                    ACTION_WIDGET_NEXT -> MediaNotificationListenerService.ACTION_WIDGET_NEXT
-                    ACTION_WIDGET_PREV -> MediaNotificationListenerService.ACTION_WIDGET_PREV
-                    else -> MediaNotificationListenerService.ACTION_WIDGET_PLAY_PAUSE
+                    ACTION_WIDGET_NEXT -> "com.muswall.app.ACTION_WIDGET_NEXT"
+                    ACTION_WIDGET_PREV -> "com.muswall.app.ACTION_WIDGET_PREV"
+                    else -> "com.muswall.app.ACTION_WIDGET_PLAY_PAUSE"
                 }
                 context.sendBroadcast(Intent(action).setPackage(context.packageName))
                 updateAll(context)
