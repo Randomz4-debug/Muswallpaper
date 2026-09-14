@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:layout_width="match_parent" android:layout_height="48dp" android:gravity="center_vertical" android:orientation="horizontal" android:paddingStart="8dp" android:paddingEnd="8dp">
+<TextView android:id="@+id/settingLabel" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="Setting" android:textColor="#FFFFFF" android:textSize="15sp"/>
+<androidx.appcompat.widget.SwitchCompat android:id="@+id/settingSwitch" android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+</LinearLayout>
