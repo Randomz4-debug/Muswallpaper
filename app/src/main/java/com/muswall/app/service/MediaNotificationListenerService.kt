@@ -62,9 +62,9 @@ class MediaNotificationListenerService : NotificationListenerService() {
             val updateTime = state?.lastPositionUpdateTime ?: 0L
             val elapsed = if (updateTime > 0L) (android.os.SystemClock.elapsedRealtime() - updateTime).coerceAtLeast(0L) else 0L
             val position = (basePosition + elapsed).coerceAtLeast(0L)
-            prefs.lyricsPosition = position
+            if (position - prefs.lyricsPosition >= 250L || updateTime == 0L) prefs.lyricsPosition = position
             sendBroadcast(Intent(ACTION_LIVE_TICK).setPackage(packageName).putExtra(EXTRA_POSITION_MS, position))
-            timelineHandler.postDelayed(this, 60L)
+            timelineHandler.postDelayed(this, 250L)
         }
     }
 
@@ -266,6 +266,7 @@ class MediaNotificationListenerService : NotificationListenerService() {
         prefs.lyricsPosition=activeController?.playbackState?.position?.coerceAtLeast(0L)?:prefs.lyricsPosition
         if(!prefs.isAutoEnabled||!playing||prefs.wallpaperMode!=PreferencesManager.MODE_MUSIC)return
         if(!prefs.liveWallpaperEnabled){broadcastWallpaperApplied("Music detected • enable MusWall Live Wallpaper once");return}
+        scope.launch(Dispatchers.IO) { wallpaperHelper.prepareOriginalBeforeLiveWallpaper() }
         val token=generation.incrementAndGet()
         generationJob?.cancel()
         generationJob=scope.launch(Dispatchers.Default){

@@ -82,7 +82,11 @@ class MusicWallpaperService : WallpaperService() {
         }
 
         private fun sourceFile(): File? {
-            if (!prefs.liveMusicPlaying) return null
+            if (!prefs.liveMusicPlaying) {
+                val original = File(applicationContext.filesDir, WallpaperHelper.FILE_ORIGINAL_LOCK)
+                if (original.exists()) return original
+                return null
+            }
             val current = File(applicationContext.filesDir, WallpaperHelper.FILE_CURRENT)
             if (current.exists()) return current
             val last = File(applicationContext.filesDir, WallpaperHelper.FILE_LAST_ARTWORK)

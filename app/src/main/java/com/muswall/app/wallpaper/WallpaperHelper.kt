@@ -100,10 +100,30 @@ class WallpaperHelper(private val context: Context) {
     suspend fun applyLockFrame(bitmap: Bitmap): Boolean = withContext(Dispatchers.IO) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return@withContext false
         try {
-            backupOriginalIfNeeded()
+            if (!originalFile(WallpaperManager.FLAG_LOCK).exists() && prefs.originalLockWallpaperUri.isBlank()) backupOriginalIfNeeded()
             wallpaperManager.setBitmap(bitmap, null, true, WallpaperManager.FLAG_LOCK)
             true
         } catch (t: Throwable) { Log.w(TAG, "Lock frame update failed", t); false }
+    }
+
+    suspend fun prepareOriginalBeforeLiveWallpaper(): Boolean = withContext(Dispatchers.IO) {
+        try {
+            if (originalFile(WallpaperManager.FLAG_LOCK).exists()) return@withContext true
+            if (prefs.originalLockWallpaperUri.isNotBlank()) return@withContext true
+            backupOneIfMissingForPreparation(WallpaperManager.FLAG_LOCK)
+            originalFile(WallpaperManager.FLAG_LOCK).exists()
+        } catch (_: Throwable) { false }
+    }
+
+    private fun backupOneIfMissingForPreparation(which: Int) {
+        val destination=originalFile(which)
+        if(destination.exists())return
+        try {
+            @Suppress("DEPRECATION")
+            val drawable=wallpaperManager.peekDrawable(which)
+            val source=(drawable as? BitmapDrawable)?.bitmap ?: return
+            FileOutputStream(destination).use { source.compress(Bitmap.CompressFormat.PNG,100,it) }
+        } catch (_: Throwable) {}
     }
 
     suspend fun restoreOriginalLock(): Boolean = withContext(Dispatchers.IO) {

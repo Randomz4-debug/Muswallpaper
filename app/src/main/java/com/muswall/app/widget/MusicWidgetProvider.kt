@@ -133,8 +133,10 @@ class MusicWidgetProvider : AppWidgetProvider() {
 
             val artFile = File(context.filesDir, "last_album_art.jpg")
             if (prefs.widgetShowArtwork && artFile.exists()) {
-                BitmapFactory.decodeFile(artFile.absolutePath)?.let { bitmap ->
-                    views.setImageViewBitmap(R.id.widgetArt, bitmap)
+                BitmapFactory.Options().also { it.inSampleSize = 4 }.let { options ->
+                    BitmapFactory.decodeFile(artFile.absolutePath, options)?.let { bitmap ->
+                        views.setImageViewBitmap(R.id.widgetArt, bitmap)
+                    }
                 }
                 views.setViewVisibility(R.id.widgetArt, View.VISIBLE)
             } else {
