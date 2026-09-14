@@ -4,6 +4,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Bundle
@@ -12,17 +13,19 @@ import android.text.TextUtils
 import android.view.View
 import android.widget.ImageView
 import android.widget.PopupMenu
+import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.widget.SwitchCompat
 import androidx.core.content.ContextCompat
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.button.MaterialButtonToggleGroup
 import com.google.android.material.chip.ChipGroup
 import com.google.android.material.slider.Slider
-import android.widget.TextView
 import com.muswall.app.R
 import com.muswall.app.data.PreferencesManager
+import com.muswall.app.python.PythonBridge
 import com.muswall.app.service.MediaNotificationListenerService
 import com.muswall.app.wallpaper.WallpaperHelper
 import kotlinx.coroutines.*
@@ -34,6 +37,7 @@ class MainActivity : AppCompatActivity() {
     private val uiScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var selectedUri: Uri? = null
     private var previewJob: Job? = null
+    private var renderJob: Job? = null
     private var uiReady = false
 
     private lateinit var imageHome: ImageView
@@ -46,7 +50,7 @@ class MainActivity : AppCompatActivity() {
     private val pickImage = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri == null) return@registerForActivityResult
         selectedUri = uri
-        try { contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) } catch (_: Exception) {}
+        try { contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) } catch (_: Throwable) {}
         prefs.staticWallpaperUri = uri.toString()
         loadPreviewFromUri(uri)
         Toast.makeText(this, "Image selected", Toast.LENGTH_SHORT).show()
@@ -61,7 +65,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 MediaNotificationListenerService.ACTION_PLAYBACK_STATE_CHANGED -> {
                     val playing = intent.getBooleanExtra(MediaNotificationListenerService.EXTRA_IS_PLAYING, false)
-                    textStatus.text = if (playing) "● Playing • MusWall is listening" else "Paused • waiting for playback"
+                    textStatus.text = if (playing) "● Playing" else "Paused"
                 }
                 MediaNotificationListenerService.ACTION_WALLPAPER_APPLIED -> {
                     textStatus.text = intent.getStringExtra(MediaNotificationListenerService.EXTRA_STATUS_MESSAGE) ?: "Wallpaper updated"
@@ -76,7 +80,7 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
         prefs = PreferencesManager.getInstance(this)
         wallpaperHelper = WallpaperHelper(this)
-        com.muswall.app.python.PythonBridge.initialize(this)
+        PythonBridge.initialize(this)
 
         imageHome = findViewById(R.id.imageHomePreview)
         imageLock = findViewById(R.id.imageLockPreview)
@@ -86,24 +90,22 @@ class MainActivity : AppCompatActivity() {
         permissionText = findViewById(R.id.textPermissionStatus)
         uiReady = true
 
-        safeUiInit("modes") { setupModes() }
-        safeUiInit("effects") { setupEffects() }
-        safeUiInit("sliders") { setupSliders() }
-        safeUiInit("actions") { setupActions() }
-        safeUiInit("state") {
-            if (prefs.staticWallpaperUri.isNotBlank()) selectedUri = runCatching { Uri.parse(prefs.staticWallpaperUri) }.getOrNull()
-            restoreUi()
-        }
-        safeUiInit("preview") {
+        runUi("modes") { setupModes() }
+        runUi("effects") { setupEffects() }
+        runUi("sliders") { setupSliders() }
+        runUi("actions") { setupActions() }
+        runUi("state") { restoreUi() }
+        runUi("preview") {
+            selectedUri = prefs.staticWallpaperUri.takeIf { it.isNotBlank() }?.let { runCatching { Uri.parse(it) }.getOrNull() }
             if (prefs.wallpaperMode == PreferencesManager.MODE_STATIC && selectedUri != null) loadPreviewFromUri(selectedUri!!)
             else loadCurrentPreview()
         }
     }
 
-    private fun safeUiInit(name: String, block: () -> Unit) {
+    private fun runUi(name: String, block: () -> Unit) {
         try { block() } catch (t: Throwable) {
-            android.util.Log.e("MusWall", "Optional UI component failed: $name", t)
-            Toast.makeText(this, "Some $name controls are unavailable, but MusWall is still running.", Toast.LENGTH_SHORT).show()
+            android.util.Log.e("MusWall", "UI init failed: $name", t)
+            Toast.makeText(this, "MusWall could not load one $name control", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -112,34 +114,23 @@ class MainActivity : AppCompatActivity() {
         group.check(if (prefs.wallpaperMode == PreferencesManager.MODE_STATIC) R.id.modeStatic else R.id.modeMusic)
         group.addOnButtonCheckedListener { _, id, checked ->
             if (!checked) return@addOnButtonCheckedListener
-            val music = id == R.id.modeMusic
-            prefs.wallpaperMode = if (music) PreferencesManager.MODE_MUSIC else PreferencesManager.MODE_STATIC
-            findViewById<TextView>(R.id.textModeDescription).text = if (music)
-                "Music mode: the installed live wallpaper follows the currently playing track."
-            else
-                "Static mode: choose a fixed wallpaper from your gallery."
-
-            if (music && !prefs.liveWallpaperEnabled) {
-                // Music mode never falls back to setBitmap(). Android requires the
-                // user to confirm a live wallpaper in the system picker, so launch
-                // that picker once when Music mode is enabled.
-                prefs.liveWallpaperEnabled = true
-                Toast.makeText(this, "Choose MusWall Live Wallpaper to enable automatic music wallpapers.", Toast.LENGTH_LONG).show()
-                wallpaperHelper.openLiveWallpaperPicker()
-            }
+            prefs.wallpaperMode = if (id == R.id.modeStatic) PreferencesManager.MODE_STATIC else PreferencesManager.MODE_MUSIC
+            findViewById<TextView>(R.id.textModeDescription).text = if (prefs.wallpaperMode == PreferencesManager.MODE_STATIC)
+                "Static mode: choose a fixed image and apply it with the Apply button."
+            else "Music mode: the installed MusWall live wallpaper follows playback without replacing the system wallpaper."
+            if (prefs.wallpaperMode == PreferencesManager.MODE_MUSIC && prefs.liveWallpaperEnabled) rerenderCurrentMusicWallpaper()
         }
     }
 
     private fun setupEffects() {
         val effects = findViewById<ChipGroup>(R.id.effectGroup)
-        val effectId = when (prefs.effect) {
+        effects.check(when (prefs.effect) {
             PreferencesManager.EFFECT_COVER -> R.id.effectCover
             PreferencesManager.EFFECT_CD -> R.id.effectCd
             PreferencesManager.EFFECT_SQUARE -> R.id.effectSquare
             PreferencesManager.EFFECT_COVER_COLOR -> R.id.effectCoverColor
             else -> R.id.effectBlur
-        }
-        effects.check(effectId)
+        })
         effects.setOnCheckedStateChangeListener { _, ids ->
             if (ids.isEmpty()) return@setOnCheckedStateChangeListener
             prefs.effect = when (ids[0]) {
@@ -183,7 +174,7 @@ class MainActivity : AppCompatActivity() {
     private fun bindSlider(sliderId: Int, labelId: Int, name: String, save: (Int) -> Unit) {
         val slider = findViewById<Slider>(sliderId)
         val label = findViewById<TextView>(labelId)
-        val savedValue = when (sliderId) {
+        val saved = when (sliderId) {
             R.id.sliderBlur -> prefs.blurRadius
             R.id.sliderCoverHeight -> prefs.coverHeight
             R.id.sliderCoverOffset -> prefs.coverOffset
@@ -191,12 +182,11 @@ class MainActivity : AppCompatActivity() {
             R.id.sliderDarkness -> prefs.darkness
             else -> prefs.artScale
         }
-        slider.value = savedValue.toFloat().coerceIn(slider.valueFrom, slider.valueTo)
+        slider.value = saved.toFloat().coerceIn(slider.valueFrom, slider.valueTo)
         label.text = "$name   ${slider.value.toInt()}"
         slider.addOnChangeListener { _, value, _ ->
-            val n = value.toInt()
-            save(n)
-            label.text = "$name   $n"
+            save(value.toInt())
+            label.text = "$name   ${value.toInt()}"
             schedulePreview()
         }
     }
@@ -204,11 +194,11 @@ class MainActivity : AppCompatActivity() {
     private fun setupActions() {
         findViewById<View>(R.id.btnAddImage).setOnClickListener { pickImage.launch(arrayOf("image/*")) }
         findViewById<View>(R.id.galleryPlaceholder).setOnClickListener { pickImage.launch(arrayOf("image/*")) }
-        findViewById<androidx.appcompat.widget.SwitchCompat>(R.id.switchAutoWallpaper).apply {
+        findViewById<SwitchCompat>(R.id.switchAutoWallpaper).apply {
             isChecked = prefs.isAutoEnabled
             setOnCheckedChangeListener { _, checked -> prefs.isAutoEnabled = checked }
         }
-        findViewById<androidx.appcompat.widget.SwitchCompat>(R.id.switchRestoreOnPause).apply {
+        findViewById<SwitchCompat>(R.id.switchRestoreOnPause).apply {
             isChecked = prefs.restoreOnPause
             setOnCheckedChangeListener { _, checked -> prefs.restoreOnPause = checked }
         }
@@ -222,51 +212,76 @@ class MainActivity : AppCompatActivity() {
         findViewById<MaterialButton>(R.id.btnApply).setOnClickListener { applyCurrent() }
         findViewById<View>(R.id.btnMenu).setOnClickListener { showMenu(it) }
         findViewById<View>(R.id.btnShare).setOnClickListener { shareCurrent() }
-        findViewById<View>(R.id.btnPro).setOnClickListener {
-            Toast.makeText(this, "Pro features are unlocked by the app design; no account is required for the core features.", Toast.LENGTH_LONG).show()
-        }
+        findViewById<View>(R.id.btnPro).setOnClickListener { Toast.makeText(this, "Core MusWall features are available without an account.", Toast.LENGTH_SHORT).show() }
     }
 
     private fun restoreUi() {
         textTrack.text = prefs.lastTrackTitle.ifBlank { "No music detected" }
         textArtist.text = prefs.lastArtist.ifBlank { "Enable music detection below" }
-        permissionText.text = if (isNotificationAccessEnabled()) "✓ Notification access enabled. Music detection is ready."
-        else "Notification access is OFF. Enable it before automatic music wallpapers can work."
-        textStatus.text = if (prefs.liveWallpaperEnabled) "Live wallpaper mode" else "Ready"
+        permissionText.text = if (isNotificationAccessEnabled()) "✓ Notification access enabled. Music detection is ready." else "Notification access is OFF. Enable it before automatic music wallpapers can work."
+        textStatus.text = if (prefs.liveWallpaperEnabled) "Live wallpaper" else "Ready"
     }
 
     private fun schedulePreview() {
         previewJob?.cancel()
         previewJob = uiScope.launch {
-            delay(80)
-            if (prefs.wallpaperMode == PreferencesManager.MODE_STATIC && selectedUri != null) loadPreviewFromUri(selectedUri!!)
-            else loadCurrentPreview()
+            delay(120)
+            if (prefs.wallpaperMode == PreferencesManager.MODE_STATIC && selectedUri != null) {
+                loadPreviewFromUri(selectedUri!!)
+            } else if (prefs.wallpaperMode == PreferencesManager.MODE_MUSIC && prefs.liveWallpaperEnabled) {
+                rerenderCurrentMusicWallpaper()
+            } else {
+                loadCurrentPreview()
+            }
         }
     }
 
-    private fun decodeSampled(file: File, maxWidth: Int = 720, maxHeight: Int = 1280): android.graphics.Bitmap? {
-        return try {
-            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            BitmapFactory.decodeFile(file.absolutePath, bounds)
-            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
-            var sample = 1
-            while (bounds.outWidth / sample > maxWidth || bounds.outHeight / sample > maxHeight) sample *= 2
-            BitmapFactory.decodeFile(file.absolutePath, BitmapFactory.Options().apply {
-                inSampleSize = sample
-                inPreferredConfig = android.graphics.Bitmap.Config.RGB_565
-            })
-        } catch (t: Throwable) {
-            android.util.Log.w("MusWall", "Image decode failed", t)
-            null
+    private fun rerenderCurrentMusicWallpaper() {
+        val file = wallpaperHelper.lastArtworkFile()
+        if (!file.exists() || !prefs.liveWallpaperEnabled) return
+        renderJob?.cancel()
+        renderJob = uiScope.launch(Dispatchers.Default) {
+            val source = decodeSampled(file, 900, 900) ?: return@launch
+            try {
+                val dm = resources.displayMetrics
+                val result = PythonBridge.generateWallpaper(
+                    source,
+                    (dm.widthPixels * 0.58f).toInt().coerceIn(480, 720),
+                    (dm.heightPixels * 0.58f).toInt().coerceIn(900, 1440),
+                    prefs.blurRadius.toFloat(), prefs.darkness / 100f, prefs.artScale / 100f,
+                    42, true, prefs.effect, prefs.blurType, prefs.coverHeight, prefs.coverOffset, prefs.transitionHeight
+                ) ?: return@launch
+                try {
+                    wallpaperHelper.saveCurrentForLiveWallpaper(result)
+                    if (prefs.liveMusicPlaying) sendBroadcast(Intent(com.muswall.app.wallpaper.MusicWallpaperService.ACTION_REFRESH).setPackage(packageName))
+                    withContext(Dispatchers.Main) { loadCurrentPreview() }
+                } finally { if (!result.isRecycled) result.recycle() }
+            } finally { if (!source.isRecycled) source.recycle() }
         }
+    }
+
+    private fun decodeSampled(file: File, maxWidth: Int, maxHeight: Int): Bitmap? = try {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(file.absolutePath, bounds)
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+        var sample = 1
+        while (bounds.outWidth / sample > maxWidth || bounds.outHeight / sample > maxHeight) sample *= 2
+        BitmapFactory.decodeFile(file.absolutePath, BitmapFactory.Options().apply {
+            inSampleSize = sample
+            inPreferredConfig = Bitmap.Config.RGB_565
+        })
+    } catch (t: Throwable) {
+        android.util.Log.w("MusWall", "Image decode failed", t)
+        null
     }
 
     private fun loadCurrentPreview() {
         val file = File(filesDir, WallpaperHelper.FILE_CURRENT)
-        if (!file.exists()) return
-        val bitmap = decodeSampled(file) ?: return
-        imageHome.setImageBitmap(bitmap)
-        imageLock.setImageBitmap(bitmap)
+        val bitmap = if (file.exists()) decodeSampled(file, 720, 1280) else null
+        if (bitmap != null) {
+            imageHome.setImageBitmap(bitmap)
+            imageLock.setImageBitmap(bitmap)
+        }
     }
 
     private fun loadPreviewFromUri(uri: Uri) {
@@ -280,10 +295,10 @@ class MainActivity : AppCompatActivity() {
                     while (bounds.outWidth / sample > 720 || bounds.outHeight / sample > 1280) sample *= 2
                     BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply {
                         inSampleSize = sample
-                        inPreferredConfig = android.graphics.Bitmap.Config.RGB_565
+                        inPreferredConfig = Bitmap.Config.RGB_565
                     })
                 }
-            } catch (t: Throwable) { null }
+            } catch (_: Throwable) { null }
             withContext(Dispatchers.Main) {
                 if (bitmap != null && !isFinishing && !isDestroyed) {
                     imageHome.setImageBitmap(bitmap)
@@ -293,41 +308,35 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun decodeUriForRender(uri: Uri): android.graphics.Bitmap? {
-        return try {
-            contentResolver.openInputStream(uri)?.use { input ->
-                val bytes = input.readBytes()
-                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
-                var sample = 1
-                while (bounds.outWidth / sample > 1600 || bounds.outHeight / sample > 1600) sample *= 2
-                BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply {
-                    inSampleSize = sample
-                    inPreferredConfig = android.graphics.Bitmap.Config.ARGB_8888
-                })
-            }
-        } catch (t: Throwable) { null }
-    }
+    private fun decodeUriForRender(uri: Uri): Bitmap? = try {
+        contentResolver.openInputStream(uri)?.use { input ->
+            val bytes = input.readBytes()
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+            var sample = 1
+            while (bounds.outWidth / sample > 1600 || bounds.outHeight / sample > 1600) sample *= 2
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply {
+                inSampleSize = sample
+                inPreferredConfig = Bitmap.Config.ARGB_8888
+            })
+        }
+    } catch (_: Throwable) { null }
 
     private fun applyCurrent() {
         uiScope.launch {
             if (prefs.wallpaperMode == PreferencesManager.MODE_MUSIC) {
-                // Never replace a music wallpaper with a static wallpaper.
                 prefs.liveWallpaperEnabled = true
                 wallpaperHelper.openLiveWallpaperPicker()
                 return@launch
             }
-
             val source = selectedUri?.let { decodeUriForRender(it) }
             if (source == null) {
                 Toast.makeText(this@MainActivity, "Choose an image first", Toast.LENGTH_LONG).show()
                 return@launch
             }
             val dm = resources.displayMetrics
-            val rendered = com.muswall.app.python.PythonBridge.generateWallpaper(
-                source,
-                (dm.widthPixels * 0.75f).toInt().coerceIn(480, 900),
-                (dm.heightPixels * 0.75f).toInt().coerceIn(960, 1800),
+            val rendered = PythonBridge.generateWallpaper(
+                source, (dm.widthPixels * 0.75f).toInt().coerceIn(480, 900), (dm.heightPixels * 0.75f).toInt().coerceIn(960, 1800),
                 prefs.blurRadius.toFloat(), prefs.darkness / 100f, prefs.artScale / 100f,
                 42, true, prefs.effect, prefs.blurType, prefs.coverHeight, prefs.coverOffset, prefs.transitionHeight
             )
@@ -336,14 +345,14 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this@MainActivity, "Could not render wallpaper", Toast.LENGTH_LONG).show()
                 return@launch
             }
-            val result = wallpaperHelper.applyStatic(rendered, prefs.targetScreen)
-            if (result.success) {
-                wallpaperHelper.saveCurrentForLiveWallpaper(rendered)
+            try {
+                val result = wallpaperHelper.applyStatic(rendered, prefs.targetScreen)
+                if (result.success) loadCurrentPreview()
+                Toast.makeText(this@MainActivity, if (result.success) "Static wallpaper applied" else "Failed: ${result.message}", Toast.LENGTH_LONG).show()
+            } finally {
                 if (!rendered.isRecycled) rendered.recycle()
-                loadCurrentPreview()
-            } else if (!rendered.isRecycled) rendered.recycle()
-            if (!source.isRecycled) source.recycle()
-            Toast.makeText(this@MainActivity, if (result.success) "Wallpaper applied" else "Failed: ${result.message}", Toast.LENGTH_LONG).show()
+                if (!source.isRecycled) source.recycle()
+            }
         }
     }
 
@@ -375,24 +384,17 @@ class MainActivity : AppCompatActivity() {
     private fun showHistory() {
         val history = File(filesDir, "history")
         val items = history.listFiles()?.sortedByDescending { it.lastModified() } ?: emptyList()
-        if (items.isEmpty()) { Toast.makeText(this, "History is empty", Toast.LENGTH_SHORT).show(); return }
-        android.app.AlertDialog.Builder(this).setTitle("History")
-            .setMessage(items.take(20).joinToString("\n") { it.name })
-            .setPositiveButton("OK", null).show()
+        Toast.makeText(this, if (items.isEmpty()) "History is empty" else "${items.size} wallpaper(s) in history", Toast.LENGTH_SHORT).show()
     }
 
-    private fun shareCurrent() {
-        val file = File(filesDir, WallpaperHelper.FILE_CURRENT)
-        if (!file.exists()) Toast.makeText(this, "No wallpaper to share", Toast.LENGTH_SHORT).show()
-        else Toast.makeText(this, "Save the wallpaper first, then share it from your gallery.", Toast.LENGTH_LONG).show()
-    }
+    private fun shareCurrent() = Toast.makeText(this, "Save the wallpaper first, then share it from your gallery.", Toast.LENGTH_LONG).show()
 
     private fun isNotificationAccessEnabled(): Boolean {
         val component = "$packageName/${MediaNotificationListenerService::class.java.name}"
         return try {
             val raw = Settings.Secure.getString(contentResolver, "enabled_notification_listeners") ?: ""
             !TextUtils.isEmpty(raw) && raw.split(":").any { it.equals(component, true) }
-        } catch (_: Exception) { false }
+        } catch (_: Throwable) { false }
     }
 
     override fun onStart() {
@@ -405,21 +407,25 @@ class MainActivity : AppCompatActivity() {
                 addAction(MediaNotificationListenerService.ACTION_WALLPAPER_APPLIED)
             }
             ContextCompat.registerReceiver(this, statusReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
-        } catch (_: Throwable) {}
+        } catch (t: Throwable) { android.util.Log.w("MusWall", "Receiver registration failed", t) }
     }
 
     override fun onResume() {
         super.onResume()
-        if (uiReady) restoreUi()
+        if (uiReady) {
+            restoreUi()
+            if (prefs.wallpaperMode == PreferencesManager.MODE_MUSIC && prefs.liveWallpaperEnabled) loadCurrentPreview()
+        }
     }
 
     override fun onStop() {
-        try { unregisterReceiver(statusReceiver) } catch (_: Exception) {}
+        try { unregisterReceiver(statusReceiver) } catch (_: Throwable) {}
         super.onStop()
     }
 
     override fun onDestroy() {
         previewJob?.cancel()
+        renderJob?.cancel()
         uiScope.cancel()
         super.onDestroy()
     }
