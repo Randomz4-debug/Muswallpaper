@@ -1,6 +1,9 @@
 name: Fix live wallpaper performance
 
 on:
+  push:
+    paths:
+      - '.github/workflows/fix-live-performance.yml'
   workflow_dispatch:
 
 permissions:
@@ -15,18 +18,9 @@ jobs:
         run: |
           python3 <<'PY'
           from pathlib import Path
-          import re
-
           wp = Path('app/src/main/java/com/muswall/app/wallpaper/MusicWallpaperService.kt')
           s = wp.read_text()
-
-          # Cache parsed lyrics and reuse the bass Paint object. The old implementation
-          # parsed the entire lyrics string and allocated Paint/shaders on every frame.
-          s = s.replace(
-              '        private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { typeface = android.graphics.Typeface.create("sans", android.graphics.Typeface.NORMAL) }\n',
-              '        private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { typeface = android.graphics.Typeface.create("sans", android.graphics.Typeface.NORMAL) }\n        private val bassPaintCache = Paint(Paint.ANTI_ALIAS_FLAG)\n        private var cachedLyricsRaw = ""\n        private var cachedLyricLines: List<LyricLine> = emptyList()\n        private var lastSurfaceWidth = 0\n        private var lastSurfaceHeight = 0\n'
-          )
-
+          s = s.replace('        private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { typeface = android.graphics.Typeface.create("sans", android.graphics.Typeface.NORMAL) }\n', '        private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { typeface = android.graphics.Typeface.create("sans", android.graphics.Typeface.NORMAL) }\n        private val bassPaintCache = Paint(Paint.ANTI_ALIAS_FLAG)\n        private var cachedLyricsRaw = ""\n        private var cachedLyricLines: List<LyricLine> = emptyList()\n')
           old = '''        private fun currentLyricLines(): List<String> {
             if (!prefs.showLyrics) return emptyList()
             val raw = prefs.lastLyrics.trim()
@@ -65,10 +59,8 @@ jobs:
             return plain.subList(from, minOf(plain.size, from + prefs.lyricsLines))
         }
 '''
-          if old not in s:
-              raise SystemExit('currentLyricLines block not found')
+          if old not in s: raise SystemExit('currentLyricLines block not found')
           s = s.replace(old, new)
-
           old = '''        private fun bassPaint(canvas: Canvas): Paint {
             val c1 = parseColor(prefs.bassColor, Color.WHITE)
             val c2 = parseColor(prefs.bassColor2, Color.CYAN)
@@ -101,44 +93,20 @@ jobs:
             return p
         }
 '''
-          if old not in s:
-              raise SystemExit('bassPaint block not found')
+          if old not in s: raise SystemExit('bassPaint block not found')
           s = s.replace(old, new)
-
-          # Hardware canvas greatly reduces software bitmap scaling stalls on modern Android.
-          old = '                canvas = holder.lockCanvas() ?: return\n'
-          new = '''                canvas = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+          s = s.replace('                canvas = holder.lockCanvas() ?: return\n', '''                canvas = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     try { holder.lockHardwareCanvas() } catch (_: Throwable) { holder.lockCanvas() }
                 } else holder.lockCanvas()
                 if (canvas == null) return
-'''
-          if old not in s:
-              raise SystemExit('lockCanvas line not found')
-          s = s.replace(old, new)
-
-          # Do not recycle the cached bitmap while a draw is using it; it is only replaced on a new file.
-          # Also clear lyric cache when the engine is destroyed.
-          s = s.replace(
-              '            cachedBitmap = null\n            drawThread.quitSafely()',
-              '            cachedBitmap = null\n            cachedLyricsRaw = ""\n            cachedLyricLines = emptyList()\n            drawThread.quitSafely()'
-          )
+''')
+          s = s.replace('            cachedBitmap = null\n            drawThread.quitSafely()', '            cachedBitmap = null\n            cachedLyricsRaw = ""\n            cachedLyricLines = emptyList()\n            drawThread.quitSafely()')
           wp.write_text(s)
 
           media = Path('app/src/main/java/com/muswall/app/service/MediaNotificationListenerService.kt')
           m = media.read_text()
-
-          # Keep the main service responsive and prevent a stale lyric translation/network job
-          # from delaying the next artwork generation. Lyrics are resolved independently.
-          m = m.replace(
-              '    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)\n',
-              '    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)\n'
-          )
-
-          # The live wallpaper should be fed position updates less frequently; its own draw loop
-          # interpolates visual frames through the surface. 250 ms is enough for lyric timing and saves CPU.
+          m = m.replace('    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)\n', '    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)\n')
           m = m.replace('            timelineHandler.postDelayed(this, 200L)\n', '            timelineHandler.postDelayed(this, 250L)\n')
-
-          # On pause/stop, restore the original lock wallpaper while preserving all song metadata/widget data.
           old = '''            prefs.liveMusicPlaying = false
             sendBroadcast(
                 Intent(ACTION_LIVE_TICK)
@@ -160,23 +128,20 @@ jobs:
             refreshLive()
             broadcastWallpaperApplied("Music paused • original wallpaper restored")
 '''
-          if old not in m:
-              raise SystemExit('pause block not found')
+          if old not in m: raise SystemExit('pause block not found')
           m = m.replace(old, new)
           media.write_text(m)
-
-          print('patched live wallpaper performance')
+          print('patch complete')
           PY
-      - name: Verify changed sources
+      - name: Verify
         run: |
-          grep -n "lockHardwareCanvas\|cachedLyricLines\|scope = CoroutineScope\|restoreOriginalLock" app/src/main/java/com/muswall/app/wallpaper/MusicWallpaperService.kt app/src/main/java/com/muswall/app/service/MediaNotificationListenerService.kt
-      - name: Commit changes
+          grep -n "lockHardwareCanvas\|cachedLyricLines\|Dispatchers.Default\|restoreOriginalLock" app/src/main/java/com/muswall/app/wallpaper/MusicWallpaperService.kt app/src/main/java/com/muswall/app/service/MediaNotificationListenerService.kt
+      - name: Commit patch
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add app/src/main/java/com/muswall/app/wallpaper/MusicWallpaperService.kt app/src/main/java/com/muswall/app/service/MediaNotificationListenerService.kt
-          git diff --cached --quiet || git commit -m "Fix live wallpaper lag during lyrics and bass"
-          git push
+          if git diff --cached --quiet; then echo "No changes"; else git commit -m "Fix live wallpaper lag during lyrics and bass"; git push; fi
       - name: Remove one-time workflow
         if: always()
         run: |
