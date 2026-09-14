@@ -80,7 +80,7 @@ class MediaNotificationListenerService : NotificationListenerService() {
     private val preferenceListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
         when (key) {
             "show_lyrics", "lyrics_language" -> {
-                if (playing) activeController?.metadata?.let { loadLyrics(it, force = true) }
+                if (playing) activeController?.metadata?.let { handleMetadata(it, true) }
                 refreshLive()
             }
             "lyrics_x", "lyrics_y", "lyrics_width", "lyrics_size", "lyrics_lines",
