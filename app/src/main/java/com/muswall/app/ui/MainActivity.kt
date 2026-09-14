@@ -27,6 +27,7 @@ import com.muswall.app.R
 import com.muswall.app.data.PreferencesManager
 import com.muswall.app.python.PythonBridge
 import com.muswall.app.service.MediaNotificationListenerService
+import com.muswall.app.wallpaper.MusicWallpaperService
 import com.muswall.app.wallpaper.WallpaperHelper
 import kotlinx.coroutines.*
 import java.io.File
@@ -81,7 +82,6 @@ class MainActivity : AppCompatActivity() {
         prefs = PreferencesManager.getInstance(this)
         wallpaperHelper = WallpaperHelper(this)
         PythonBridge.initialize(this)
-
         imageHome = findViewById(R.id.imageHomePreview)
         imageLock = findViewById(R.id.imageLockPreview)
         textTrack = findViewById(R.id.textTrack)
@@ -89,7 +89,6 @@ class MainActivity : AppCompatActivity() {
         textStatus = findViewById(R.id.textServiceStatus)
         permissionText = findViewById(R.id.textPermissionStatus)
         uiReady = true
-
         runUi("modes") { setupModes() }
         runUi("effects") { setupEffects() }
         runUi("sliders") { setupSliders() }
@@ -97,8 +96,7 @@ class MainActivity : AppCompatActivity() {
         runUi("state") { restoreUi() }
         runUi("preview") {
             selectedUri = prefs.staticWallpaperUri.takeIf { it.isNotBlank() }?.let { runCatching { Uri.parse(it) }.getOrNull() }
-            if (prefs.wallpaperMode == PreferencesManager.MODE_STATIC && selectedUri != null) loadPreviewFromUri(selectedUri!!)
-            else loadCurrentPreview()
+            if (prefs.wallpaperMode == PreferencesManager.MODE_STATIC && selectedUri != null) loadPreviewFromUri(selectedUri!!) else loadCurrentPreview()
         }
     }
 
@@ -115,9 +113,7 @@ class MainActivity : AppCompatActivity() {
         group.addOnButtonCheckedListener { _, id, checked ->
             if (!checked) return@addOnButtonCheckedListener
             prefs.wallpaperMode = if (id == R.id.modeStatic) PreferencesManager.MODE_STATIC else PreferencesManager.MODE_MUSIC
-            findViewById<TextView>(R.id.textModeDescription).text = if (prefs.wallpaperMode == PreferencesManager.MODE_STATIC)
-                "Static mode: choose a fixed image and apply it with the Apply button."
-            else "Music mode: the installed MusWall live wallpaper follows playback without replacing the system wallpaper."
+            findViewById<TextView>(R.id.textModeDescription).text = if (prefs.wallpaperMode == PreferencesManager.MODE_STATIC) "Static mode: choose a fixed image and apply it with the Apply button." else "Music mode: the installed MusWall live wallpaper follows playback without replacing the system wallpaper."
             if (prefs.wallpaperMode == PreferencesManager.MODE_MUSIC && prefs.liveWallpaperEnabled) rerenderCurrentMusicWallpaper()
         }
     }
@@ -142,7 +138,6 @@ class MainActivity : AppCompatActivity() {
             }
             schedulePreview()
         }
-
         val blur = findViewById<ChipGroup>(R.id.blurGroup)
         blur.check(when (prefs.blurType) {
             PreferencesManager.BLUR_SOLID -> R.id.blurSolid
@@ -203,10 +198,7 @@ class MainActivity : AppCompatActivity() {
             setOnCheckedChangeListener { _, checked -> prefs.restoreOnPause = checked }
         }
         findViewById<MaterialButton>(R.id.btnGrantPermission).setOnClickListener { XiaomiHelper.openNotificationListenerSettings(this) }
-        findViewById<MaterialButton>(R.id.btnLiveWallpaper).setOnClickListener {
-            prefs.liveWallpaperEnabled = true
-            wallpaperHelper.openLiveWallpaperPicker()
-        }
+        findViewById<MaterialButton>(R.id.btnLiveWallpaper).setOnClickListener { prefs.liveWallpaperEnabled = true; wallpaperHelper.openLiveWallpaperPicker() }
         findViewById<MaterialButton>(R.id.btnOpenAutostart).setOnClickListener { XiaomiHelper.openAutostartSettings(this) }
         findViewById<MaterialButton>(R.id.btnOpenBatterySaver).setOnClickListener { XiaomiHelper.openBatterySaverSettings(this) }
         findViewById<MaterialButton>(R.id.btnApply).setOnClickListener { applyCurrent() }
@@ -226,13 +218,9 @@ class MainActivity : AppCompatActivity() {
         previewJob?.cancel()
         previewJob = uiScope.launch {
             delay(120)
-            if (prefs.wallpaperMode == PreferencesManager.MODE_STATIC && selectedUri != null) {
-                loadPreviewFromUri(selectedUri!!)
-            } else if (prefs.wallpaperMode == PreferencesManager.MODE_MUSIC && prefs.liveWallpaperEnabled) {
-                rerenderCurrentMusicWallpaper()
-            } else {
-                loadCurrentPreview()
-            }
+            if (prefs.wallpaperMode == PreferencesManager.MODE_STATIC && selectedUri != null) loadPreviewFromUri(selectedUri!!)
+            else if (prefs.wallpaperMode == PreferencesManager.MODE_MUSIC && prefs.liveWallpaperEnabled) rerenderCurrentMusicWallpaper()
+            else loadCurrentPreview()
         }
     }
 
@@ -244,44 +232,39 @@ class MainActivity : AppCompatActivity() {
             val source = decodeSampled(file, 900, 900) ?: return@launch
             try {
                 val dm = resources.displayMetrics
-                val result = PythonBridge.generateWallpaper(
-                    source,
-                    (dm.widthPixels * 0.58f).toInt().coerceIn(480, 720),
-                    (dm.heightPixels * 0.58f).toInt().coerceIn(900, 1440),
-                    prefs.blurRadius.toFloat(), prefs.darkness / 100f, prefs.artScale / 100f,
-                    42, true, prefs.effect, prefs.blurType, prefs.coverHeight, prefs.coverOffset, prefs.transitionHeight
-                ) ?: return@launch
+                val result = PythonBridge.generateWallpaper(source, (dm.widthPixels * 0.58f).toInt().coerceIn(480, 720), (dm.heightPixels * 0.58f).toInt().coerceIn(900, 1440), prefs.blurRadius.toFloat(), prefs.darkness / 100f, prefs.artScale / 100f, 42, true, prefs.effect, prefs.blurType, prefs.coverHeight, prefs.coverOffset, prefs.transitionHeight) ?: return@launch
                 try {
                     wallpaperHelper.saveCurrentForLiveWallpaper(result)
-                    if (prefs.liveMusicPlaying) sendBroadcast(Intent(com.muswall.app.wallpaper.MusicWallpaperService.ACTION_REFRESH).setPackage(packageName))
+                    if (prefs.liveMusicPlaying) sendBroadcast(Intent(MusicWallpaperService.ACTION_REFRESH).setPackage(packageName))
                     withContext(Dispatchers.Main) { loadCurrentPreview() }
                 } finally { if (!result.isRecycled) result.recycle() }
             } finally { if (!source.isRecycled) source.recycle() }
         }
     }
 
-    private fun decodeSampled(file: File, maxWidth: Int, maxHeight: Int): Bitmap? = try {
-        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        BitmapFactory.decodeFile(file.absolutePath, bounds)
-        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
-        var sample = 1
-        while (bounds.outWidth / sample > maxWidth || bounds.outHeight / sample > maxHeight) sample *= 2
-        BitmapFactory.decodeFile(file.absolutePath, BitmapFactory.Options().apply {
-            inSampleSize = sample
-            inPreferredConfig = Bitmap.Config.RGB_565
-        })
-    } catch (t: Throwable) {
-        android.util.Log.w("MusWall", "Image decode failed", t)
-        null
+    private fun decodeSampled(file: File, maxWidth: Int, maxHeight: Int): Bitmap? {
+        return try {
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(file.absolutePath, bounds)
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+            var sample = 1
+            while (bounds.outWidth / sample > maxWidth || bounds.outHeight / sample > maxHeight) sample *= 2
+            BitmapFactory.decodeFile(file.absolutePath, BitmapFactory.Options().apply {
+                inSampleSize = sample
+                inPreferredConfig = Bitmap.Config.RGB_565
+            })
+        } catch (t: Throwable) {
+            android.util.Log.w("MusWall", "Image decode failed", t)
+            null
+        }
     }
 
     private fun loadCurrentPreview() {
         val file = File(filesDir, WallpaperHelper.FILE_CURRENT)
-        val bitmap = if (file.exists()) decodeSampled(file, 720, 1280) else null
-        if (bitmap != null) {
-            imageHome.setImageBitmap(bitmap)
-            imageLock.setImageBitmap(bitmap)
-        }
+        if (!file.exists()) return
+        val bitmap = decodeSampled(file, 720, 1280) ?: return
+        imageHome.setImageBitmap(bitmap)
+        imageLock.setImageBitmap(bitmap)
     }
 
     private fun loadPreviewFromUri(uri: Uri) {
@@ -293,34 +276,27 @@ class MainActivity : AppCompatActivity() {
                     BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
                     var sample = 1
                     while (bounds.outWidth / sample > 720 || bounds.outHeight / sample > 1280) sample *= 2
-                    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply {
-                        inSampleSize = sample
-                        inPreferredConfig = Bitmap.Config.RGB_565
-                    })
+                    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample; inPreferredConfig = Bitmap.Config.RGB_565 })
                 }
             } catch (_: Throwable) { null }
             withContext(Dispatchers.Main) {
-                if (bitmap != null && !isFinishing && !isDestroyed) {
-                    imageHome.setImageBitmap(bitmap)
-                    imageLock.setImageBitmap(bitmap)
-                }
+                if (bitmap != null && !isFinishing && !isDestroyed) { imageHome.setImageBitmap(bitmap); imageLock.setImageBitmap(bitmap) }
             }
         }
     }
 
-    private fun decodeUriForRender(uri: Uri): Bitmap? = try {
-        contentResolver.openInputStream(uri)?.use { input ->
-            val bytes = input.readBytes()
-            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
-            var sample = 1
-            while (bounds.outWidth / sample > 1600 || bounds.outHeight / sample > 1600) sample *= 2
-            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply {
-                inSampleSize = sample
-                inPreferredConfig = Bitmap.Config.ARGB_8888
-            })
-        }
-    } catch (_: Throwable) { null }
+    private fun decodeUriForRender(uri: Uri): Bitmap? {
+        return try {
+            contentResolver.openInputStream(uri)?.use { input ->
+                val bytes = input.readBytes()
+                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+                var sample = 1
+                while (bounds.outWidth / sample > 1600 || bounds.outHeight / sample > 1600) sample *= 2
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample; inPreferredConfig = Bitmap.Config.ARGB_8888 })
+            }
+        } catch (_: Throwable) { null }
+    }
 
     private fun applyCurrent() {
         uiScope.launch {
@@ -330,37 +306,21 @@ class MainActivity : AppCompatActivity() {
                 return@launch
             }
             val source = selectedUri?.let { decodeUriForRender(it) }
-            if (source == null) {
-                Toast.makeText(this@MainActivity, "Choose an image first", Toast.LENGTH_LONG).show()
-                return@launch
-            }
+            if (source == null) { Toast.makeText(this@MainActivity, "Choose an image first", Toast.LENGTH_LONG).show(); return@launch }
             val dm = resources.displayMetrics
-            val rendered = PythonBridge.generateWallpaper(
-                source, (dm.widthPixels * 0.75f).toInt().coerceIn(480, 900), (dm.heightPixels * 0.75f).toInt().coerceIn(960, 1800),
-                prefs.blurRadius.toFloat(), prefs.darkness / 100f, prefs.artScale / 100f,
-                42, true, prefs.effect, prefs.blurType, prefs.coverHeight, prefs.coverOffset, prefs.transitionHeight
-            )
-            if (rendered == null) {
-                if (!source.isRecycled) source.recycle()
-                Toast.makeText(this@MainActivity, "Could not render wallpaper", Toast.LENGTH_LONG).show()
-                return@launch
-            }
+            val rendered = PythonBridge.generateWallpaper(source, (dm.widthPixels * 0.75f).toInt().coerceIn(480, 900), (dm.heightPixels * 0.75f).toInt().coerceIn(960, 1800), prefs.blurRadius.toFloat(), prefs.darkness / 100f, prefs.artScale / 100f, 42, true, prefs.effect, prefs.blurType, prefs.coverHeight, prefs.coverOffset, prefs.transitionHeight)
+            if (rendered == null) { if (!source.isRecycled) source.recycle(); Toast.makeText(this@MainActivity, "Could not render wallpaper", Toast.LENGTH_LONG).show(); return@launch }
             try {
                 val result = wallpaperHelper.applyStatic(rendered, prefs.targetScreen)
                 if (result.success) loadCurrentPreview()
                 Toast.makeText(this@MainActivity, if (result.success) "Static wallpaper applied" else "Failed: ${result.message}", Toast.LENGTH_LONG).show()
-            } finally {
-                if (!rendered.isRecycled) rendered.recycle()
-                if (!source.isRecycled) source.recycle()
-            }
+            } finally { if (!rendered.isRecycled) rendered.recycle(); if (!source.isRecycled) source.recycle() }
         }
     }
 
     private fun showMenu(anchor: View) {
         PopupMenu(this, anchor).apply {
-            menu.add("Save wallpaper")
-            menu.add("History")
-            menu.add("Settings")
+            menu.add("Save wallpaper"); menu.add("History"); menu.add("Settings")
             setOnMenuItemClickListener {
                 when (it.title.toString()) {
                     "Save wallpaper" -> saveCurrent()
@@ -383,8 +343,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun showHistory() {
         val history = File(filesDir, "history")
-        val items = history.listFiles()?.sortedByDescending { it.lastModified() } ?: emptyList()
-        Toast.makeText(this, if (items.isEmpty()) "History is empty" else "${items.size} wallpaper(s) in history", Toast.LENGTH_SHORT).show()
+        val count = history.listFiles()?.size ?: 0
+        Toast.makeText(this, if (count == 0) "History is empty" else "$count wallpaper(s) in history", Toast.LENGTH_SHORT).show()
     }
 
     private fun shareCurrent() = Toast.makeText(this, "Save the wallpaper first, then share it from your gallery.", Toast.LENGTH_LONG).show()
@@ -412,10 +372,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        if (uiReady) {
-            restoreUi()
-            if (prefs.wallpaperMode == PreferencesManager.MODE_MUSIC && prefs.liveWallpaperEnabled) loadCurrentPreview()
-        }
+        if (uiReady) { restoreUi(); if (prefs.wallpaperMode == PreferencesManager.MODE_MUSIC && prefs.liveWallpaperEnabled) loadCurrentPreview() }
     }
 
     override fun onStop() {
@@ -424,9 +381,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
-        previewJob?.cancel()
-        renderJob?.cancel()
-        uiScope.cancel()
-        super.onDestroy()
+        previewJob?.cancel(); renderJob?.cancel(); uiScope.cancel(); super.onDestroy()
     }
 }
