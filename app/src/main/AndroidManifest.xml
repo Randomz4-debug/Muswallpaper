@@ -5,6 +5,7 @@
     <uses-permission android:name="android.permission.SET_WALLPAPER_HINTS" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
@@ -14,13 +15,8 @@
         android:label="@string/app_name"
         android:theme="@style/Theme.MusWall">
 
-        <activity
-            android:name=".ui.SettingsActivity"
-            android:exported="false" />
-
-        <activity
-            android:name=".ui.MainActivity"
-            android:exported="true">
+        <activity android:name=".ui.SettingsActivity" android:exported="false" />
+        <activity android:name=".ui.MainActivity" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -32,21 +28,31 @@
             android:exported="true"
             android:label="MusWall Live Wallpaper"
             android:permission="android.permission.BIND_WALLPAPER">
-            <intent-filter>
-                <action android:name="android.service.wallpaper.WallpaperService" />
-            </intent-filter>
-            <meta-data
-                android:name="android.service.wallpaper"
-                android:resource="@xml/music_wallpaper" />
+            <intent-filter><action android:name="android.service.wallpaper.WallpaperService" /></intent-filter>
+            <meta-data android:name="android.service.wallpaper" android:resource="@xml/music_wallpaper" />
         </service>
 
         <service
             android:name=".service.MediaNotificationListenerService"
             android:exported="true"
             android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
-            <intent-filter>
-                <action android:name="android.service.notification.NotificationListenerService" />
-            </intent-filter>
+            <intent-filter><action android:name="android.service.notification.NotificationListenerService" /></intent-filter>
         </service>
+
+        <receiver
+            android:name=".widget.MusicWidgetProvider"
+            android:exported="true"
+            android:label="MusWall Music Widget">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="com.muswall.app.ACTION_TRACK_CHANGED" />
+                <action android:name="com.muswall.app.ACTION_PLAYBACK_STATE_CHANGED" />
+                <action android:name="com.muswall.app.ACTION_WALLPAPER_APPLIED" />
+                <action android:name="com.muswall.app.widget.PLAY" />
+                <action android:name="com.muswall.app.widget.NEXT" />
+                <action android:name="com.muswall.app.widget.PREV" />
+            </intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/music_widget_info" />
+        </receiver>
     </application>
 </manifest>
