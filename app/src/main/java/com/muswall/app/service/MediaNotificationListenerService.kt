@@ -4,6 +4,7 @@ import android.app.WallpaperManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.SharedPreferences
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.MediaMetadata
@@ -56,12 +57,31 @@ class MediaNotificationListenerService : NotificationListenerService() {
     }
     private val generation = AtomicLong(0L)
     private lateinit var prefs: PreferencesManager
+    private lateinit var sharedPrefs: SharedPreferences
     private lateinit var wallpaperHelper: WallpaperHelper
     private var sessionManager: MediaSessionManager? = null
     private var activeController: MediaController? = null
     private var currentTrackId = ""
     private var playing = false
     private var generationJob: Job? = null
+
+    private val preferenceListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        when (key) {
+            "show_lyrics" -> {
+                currentTrackId = ""
+                if (playing) activeController?.metadata?.let { handleMetadata(it, true) }
+                sendBroadcast(Intent(MusicWallpaperService.ACTION_REFRESH).setPackage(packageName))
+            }
+            "lyrics_x", "lyrics_y", "lyrics_width", "lyrics_size", "lyrics_lines", "lyrics_color", "lyrics_shadow",
+            "bass_enabled", "bass_x", "bass_y", "bass_width", "bass_height", "bass_sensitivity", "bass_color" ->
+                sendBroadcast(Intent(MusicWallpaperService.ACTION_REFRESH).setPackage(packageName))
+            "widget_opacity", "widget_show_artwork", "widget_show_title", "widget_show_artist", "widget_show_controls",
+            "widget_show_progress", "widget_show_custom_text", "widget_custom_text", "widget_empty_title",
+            "widget_text_color", "widget_secondary_color", "widget_background_color", "widget_title_size",
+            "widget_artist_size", "widget_custom_text_size", "widget_show_time", "widget_time_label" ->
+                sendBroadcast(Intent(ACTION_WIDGET_CHANGED).setPackage(packageName))
+        }
+    }
 
     private val widgetControlReceiver = object : android.content.BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -77,7 +97,6 @@ class MediaNotificationListenerService : NotificationListenerService() {
     private val settingsReceiver = object : android.content.BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action != ACTION_SETTINGS_CHANGED) return
-            // A setting can change while the same song is already playing. Force a fresh lyric/render pass.
             if (playing) {
                 currentTrackId = ""
                 activeController?.metadata?.let { handleMetadata(it, true) }
@@ -97,11 +116,11 @@ class MediaNotificationListenerService : NotificationListenerService() {
     override fun onCreate() {
         super.onCreate()
         prefs = PreferencesManager.getInstance(this)
+        sharedPrefs = getSharedPreferences("muswall", Context.MODE_PRIVATE)
+        sharedPrefs.registerOnSharedPreferenceChangeListener(preferenceListener)
         wallpaperHelper = WallpaperHelper(this)
         PythonBridge.initialize(this)
-        val filter = android.content.IntentFilter().apply {
-            addAction(ACTION_WIDGET_PLAY_PAUSE); addAction(ACTION_WIDGET_NEXT); addAction(ACTION_WIDGET_PREV)
-        }
+        val filter = android.content.IntentFilter().apply { addAction(ACTION_WIDGET_PLAY_PAUSE); addAction(ACTION_WIDGET_NEXT); addAction(ACTION_WIDGET_PREV) }
         val settingsFilter = android.content.IntentFilter(ACTION_SETTINGS_CHANGED)
         try {
             if (android.os.Build.VERSION.SDK_INT >= 33) {
@@ -215,7 +234,7 @@ class MediaNotificationListenerService : NotificationListenerService() {
     }
 
     private fun isOurLockLiveWallpaper(): Boolean = try {
-        if (android.os.Build.VERSION.SDK_INT < 24) false
+        if (android.os.Build.VERSION.SDK_INT < 34) false
         else WallpaperManager.getInstance(this).getWallpaperInfo(WallpaperManager.FLAG_LOCK)?.component == ComponentName(this, MusicWallpaperService::class.java)
     } catch (_: Throwable) { false }
 
@@ -225,15 +244,10 @@ class MediaNotificationListenerService : NotificationListenerService() {
         val targetW = (dm.widthPixels * 0.70f).toInt().coerceIn(480, 1080)
         val targetH = (dm.heightPixels * 0.70f).toInt().coerceIn(900, 1920)
         wallpaperHelper.saveLastArtwork(artwork)
-        val result = PythonBridge.generateWallpaper(
-            artwork, targetW, targetH, prefs.blurRadius.toFloat(), prefs.darkness / 100f,
-            prefs.artScale / 100f, 42, true, prefs.effect, prefs.blurType, prefs.coverHeight,
-            prefs.coverOffset, prefs.transitionHeight, false, "", prefs.photoSource, ""
-        ) ?: return
+        val result = PythonBridge.generateWallpaper(artwork, targetW, targetH, prefs.blurRadius.toFloat(), prefs.darkness / 100f, prefs.artScale / 100f, 42, true, prefs.effect, prefs.blurType, prefs.coverHeight, prefs.coverOffset, prefs.transitionHeight, false, "", prefs.photoSource, "") ?: return
         try {
             if (token != generation.get() || !playing || !prefs.liveWallpaperEnabled) return
             wallpaperHelper.saveCurrentForLiveWallpaper(result)
-            // Never replace our real lock-screen live wallpaper with a static frame. Static-frame mode is only the MIUI fallback.
             if (!isOurLockLiveWallpaper()) wallpaperHelper.applyLockFrame(result)
             if (token != generation.get() || !playing) return
             prefs.liveMusicPlaying = true
@@ -255,11 +269,10 @@ class MediaNotificationListenerService : NotificationListenerService() {
     private fun fetchLyricsFromLrcLib(metadata: MediaMetadata, title: String, artist: String): String? {
         val durationMs = metadata.getLong(MediaMetadata.METADATA_KEY_DURATION).coerceAtLeast(0L)
         return try {
-            val uri = Uri.Builder().scheme("https").authority("lrclib.net").appendPath("api").appendPath("get")
-                .appendQueryParameter("track_name", title).appendQueryParameter("artist_name", artist).apply {
-                    metadata.getString(MediaMetadata.METADATA_KEY_ALBUM)?.takeIf { it.isNotBlank() }?.let { appendQueryParameter("album_name", it) }
-                    if (durationMs > 0L) appendQueryParameter("duration", (durationMs / 1000L).toString())
-                }.build()
+            val uri = Uri.Builder().scheme("https").authority("lrclib.net").appendPath("api").appendPath("get").appendQueryParameter("track_name", title).appendQueryParameter("artist_name", artist).apply {
+                metadata.getString(MediaMetadata.METADATA_KEY_ALBUM)?.takeIf { it.isNotBlank() }?.let { appendQueryParameter("album_name", it) }
+                if (durationMs > 0L) appendQueryParameter("duration", (durationMs / 1000L).toString())
+            }.build()
             val connection = (URL(uri.toString()).openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"; connectTimeout = 2500; readTimeout = 3500
                 setRequestProperty("Accept", "application/json"); setRequestProperty("User-Agent", "MusWall/3.0")
@@ -267,8 +280,7 @@ class MediaNotificationListenerService : NotificationListenerService() {
             try {
                 if (connection.responseCode !in 200..299) return null
                 val root = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
-                root.optString("syncedLyrics").trim().takeIf { it.isNotBlank() }
-                    ?: root.optString("plainLyrics").trim().takeIf { it.isNotBlank() }
+                root.optString("syncedLyrics").trim().takeIf { it.isNotBlank() } ?: root.optString("plainLyrics").trim().takeIf { it.isNotBlank() }
             } finally { connection.disconnect() }
         } catch (t: Throwable) { android.util.Log.d("MusWallLyrics", "Lyrics lookup failed", t); null }
     }
@@ -308,6 +320,7 @@ class MediaNotificationListenerService : NotificationListenerService() {
     override fun onNotificationRemoved(sbn: android.service.notification.StatusBarNotification?) { refreshActiveSessions() }
     override fun onDestroy() {
         generation.incrementAndGet(); generationJob?.cancel(); timelineHandler.removeCallbacksAndMessages(null)
+        try { sharedPrefs.unregisterOnSharedPreferenceChangeListener(preferenceListener) } catch (_: Throwable) {}
         try { unregisterReceiver(widgetControlReceiver) } catch (_: Throwable) {}
         try { unregisterReceiver(settingsReceiver) } catch (_: Throwable) {}
         try { sessionManager?.removeOnActiveSessionsChangedListener(sessionsListener) } catch (_: Throwable) {}
