@@ -6,3 +6,7 @@ local.properties
 *.iml
 .externalNativeBuild/
 .cxx/
+__pycache__/
+*.pyc
+*.pyo
+*.tmp
