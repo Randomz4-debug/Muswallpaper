@@ -170,12 +170,16 @@ class MediaNotificationListenerService : NotificationListenerService() {
     }
 
     private fun resolveLyrics(metadata: MediaMetadata, title: String, artist: String): String {
-        val direct = metadata.getString(MediaMetadata.METADATA_KEY_LYRICS)?.trim().orEmpty()
+        // Some players expose lyrics under a custom metadata key rather than a
+        // framework constant. Read the standard literal first, then any text key
+        // containing "lyrics" so Spotify-like/player-specific implementations work.
+        val direct = metadata.getString("android.media.metadata.LYRICS")?.trim().orEmpty()
         if (direct.isNotBlank()) return direct
-        val extras = metadata.bundle
-        for (key in arrayOf("lyrics", "android.media.metadata.LYRICS", "com.google.android.music.metadata.LYRICS")) {
-            val value = extras?.getString(key)?.trim().orEmpty()
-            if (value.isNotBlank()) return value
+        for (key in metadata.keySet()) {
+            if (key.contains("lyric", ignoreCase = true)) {
+                val value = metadata.getString(key)?.trim().orEmpty()
+                if (value.isNotBlank()) return value
+            }
         }
         return fetchLyricsFromLrcLib(metadata, title, artist).orEmpty()
     }
