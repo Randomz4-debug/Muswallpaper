@@ -4,192 +4,64 @@
     android:layout_height="match_parent"
     android:background="#F8FAF3"
     android:fillViewport="true">
-
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
-        android:padding="26dp">
+        android:paddingStart="20dp"
+        android:paddingEnd="20dp"
+        android:paddingTop="18dp"
+        android:paddingBottom="40dp">
 
         <TextView
             android:id="@+id/back"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
+            android:padding="8dp"
             android:text="‹  Settings"
             android:textColor="#20241E"
-            android:textSize="31sp"
-            android:paddingBottom="18dp" />
+            android:textSize="30sp" />
 
         <TextView
             android:id="@+id/proCard"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:background="#BCEFAE"
+            android:layout_marginTop="10dp"
+            android:background="#D9F4CF"
             android:padding="18dp"
-            android:text="MusWall PRO\nUnlock all features, ad-free experience                 Upgrade"
-            android:textColor="#3F6D40"
-            android:textSize="18sp" />
-
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="24dp"
-            android:text="Appearance"
-            android:textColor="#4B7048"
-            android:textSize="18sp" />
-
-        <TextView
-            android:id="@+id/themeRow"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:padding="20dp"
-            android:text="Theme\nFollow System"
-            android:textColor="#20241E"
+            android:text="MusWall PRO\nUnlock extra effects and customization"
+            android:textColor="#355B35"
             android:textSize="17sp" />
 
-        <TextView
-            android:id="@+id/languageRow"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:padding="20dp"
-            android:text="Language\nSystem Default"
-            android:textColor="#20241E"
-            android:textSize="17sp" />
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="24dp" android:text="Appearance" android:textColor="#4B7048" android:textSize="18sp" />
+        <TextView android:id="@+id/themeRow" android:layout_width="match_parent" android:layout_height="wrap_content" android:padding="18dp" android:text="Theme\nFollow System" android:textColor="#20241E" android:textSize="16sp" />
+        <TextView android:id="@+id/languageRow" android:layout_width="match_parent" android:layout_height="wrap_content" android:padding="18dp" android:text="Language\nSystem Default" android:textColor="#20241E" android:textSize="16sp" />
+        <TextView android:id="@+id/widgetRow" android:layout_width="match_parent" android:layout_height="wrap_content" android:padding="18dp" android:text="Widget Settings\nCustomize widget appearance" android:textColor="#20241E" android:textSize="16sp" />
 
-        <TextView
-            android:id="@+id/widgetRow"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:padding="20dp"
-            android:text="Widget Settings\nCustomize widget background"
-            android:textColor="#20241E"
-            android:textSize="17sp" />
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="18dp" android:text="Wallpaper appearance" android:textColor="#4B7048" android:textSize="18sp" />
+        <TextView android:id="@+id/backgroundRow" android:layout_width="match_parent" android:layout_height="wrap_content" android:padding="18dp" android:text="Background style\nAlbum artwork / solid / gradient / auto color" android:textColor="#20241E" android:textSize="16sp" />
+        <TextView android:id="@+id/backgroundColorRow" android:layout_width="match_parent" android:layout_height="wrap_content" android:padding="18dp" android:text="Background color\nChoose the main background color" android:textColor="#20241E" android:textSize="16sp" />
+        <TextView android:id="@+id/gradientColorRow" android:layout_width="match_parent" android:layout_height="wrap_content" android:padding="18dp" android:text="Gradient end color\nChoose the second gradient color" android:textColor="#20241E" android:textSize="16sp" />
+        <TextView android:id="@+id/accentColorRow" android:layout_width="match_parent" android:layout_height="wrap_content" android:padding="18dp" android:text="Cover accent color\nBorder and transition glow" android:textColor="#20241E" android:textSize="16sp" />
 
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
-            android:text="Auto-Switch with Music"
-            android:textColor="#4B7048"
-            android:textSize="18sp" />
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="18dp" android:text="Auto-Switch with Music" android:textColor="#4B7048" android:textSize="18sp" />
+        <TextView android:id="@+id/restoreHomeRow" android:layout_width="match_parent" android:layout_height="wrap_content" android:padding="18dp" android:text="Original Home Wallpaper\nChoose what the live wallpaper shows on Home when music stops" android:textColor="#20241E" android:textSize="16sp" />
+        <TextView android:id="@+id/restoreLockRow" android:layout_width="match_parent" android:layout_height="wrap_content" android:padding="18dp" android:text="Original Lock Wallpaper\nChoose what the live wallpaper shows on Lock when music stops" android:textColor="#20241E" android:textSize="16sp" />
+        <TextView android:id="@+id/timingRow" android:layout_width="match_parent" android:layout_height="wrap_content" android:padding="18dp" android:text="Restore timing\nImmediately when playback stops" android:textColor="#20241E" android:textSize="16sp" />
 
-        <TextView
-            android:id="@+id/restoreHomeRow"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:padding="20dp"
-            android:text="Original Home Wallpaper\nChoose the wallpaper restored on the home screen when music stops"
-            android:textColor="#20241E"
-            android:textSize="17sp" />
-
-        <TextView
-            android:id="@+id/restoreLockRow"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:padding="20dp"
-            android:text="Original Lock Wallpaper\nChoose the wallpaper restored on the lock screen when music stops"
-            android:textColor="#20241E"
-            android:textSize="17sp" />
-
-        <TextView
-            android:id="@+id/timingRow"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:padding="20dp"
-            android:text="Restore timing\nWhen music is paused"
-            android:textColor="#20241E"
-            android:textSize="17sp" />
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:gravity="center_vertical"
-            android:padding="12dp">
-            <TextView
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="Apply effects to Restore\nApply the same effects to the Restore Wallpaper"
-                android:textColor="#20241E"
-                android:textSize="16sp" />
-            <androidx.appcompat.widget.SwitchCompat
-                android:id="@+id/effectsRestore"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:showText="false"
-                android:textOn=""
-                android:textOff="" />
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center_vertical" android:padding="14dp">
+            <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="Apply effects to Restore\nUse the same visual treatment on the original preview" android:textColor="#20241E" android:textSize="15sp" />
+            <androidx.appcompat.widget.SwitchCompat android:id="@+id/effectsRestore" android:layout_width="wrap_content" android:layout_height="wrap_content" android:showText="false" android:textOn="" android:textOff="" />
         </LinearLayout>
 
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
-            android:text="Music Wallpaper Service"
-            android:textColor="#4B7048"
-            android:textSize="18sp" />
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="18dp" android:text="Music Wallpaper Service" android:textColor="#4B7048" android:textSize="18sp" />
+        <TextView android:id="@+id/permissionsRow" android:layout_width="match_parent" android:layout_height="wrap_content" android:padding="18dp" android:text="Check Permissions\nNotification access" android:textColor="#20241E" android:textSize="16sp" />
+        <TextView android:id="@+id/serviceRow" android:layout_width="match_parent" android:layout_height="wrap_content" android:padding="18dp" android:text="Music Wallpaper service\nOpen notification access settings" android:textColor="#20241E" android:textSize="16sp" />
+        <TextView android:id="@+id/compatibilityRow" android:layout_width="match_parent" android:layout_height="wrap_content" android:padding="18dp" android:text="Compatibility Mode\nFast live-wallpaper rendering" android:textColor="#20241E" android:textSize="16sp" />
 
-        <TextView
-            android:id="@+id/permissionsRow"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:padding="20dp"
-            android:text="Check Permissions\nNotification and device permissions"
-            android:textColor="#20241E"
-            android:textSize="17sp" />
-
-        <TextView
-            android:id="@+id/serviceRow"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:padding="20dp"
-            android:text="Music Wallpaper service\nRe-enable music detection"
-            android:textColor="#20241E"
-            android:textSize="17sp" />
-
-        <TextView
-            android:id="@+id/compatibilityRow"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:padding="20dp"
-            android:text="Compatibility Mode\nSwitch wallpaper instantly when music changes"
-            android:textColor="#20241E"
-            android:textSize="17sp" />
-
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
-            android:text="Feedback"
-            android:textColor="#4B7048"
-            android:textSize="18sp" />
-
-        <TextView
-            android:id="@+id/feedbackRow"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:padding="20dp"
-            android:text="Send Feedback\nWe value your suggestions"
-            android:textColor="#20241E"
-            android:textSize="17sp" />
-
-        <TextView
-            android:id="@+id/faqRow"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:padding="20dp"
-            android:text="FAQ\nFrequently asked questions"
-            android:textColor="#20241E"
-            android:textSize="17sp" />
-
-        <TextView
-            android:id="@+id/updateRow"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:padding="20dp"
-            android:text="Check for Updates\nVersion 1.9.4"
-            android:textColor="#20241E"
-            android:textSize="17sp" />
-
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="18dp" android:text="Support" android:textColor="#4B7048" android:textSize="18sp" />
+        <TextView android:id="@+id/feedbackRow" android:layout_width="match_parent" android:layout_height="wrap_content" android:padding="18dp" android:text="Send Feedback\nTell us what should improve" android:textColor="#20241E" android:textSize="16sp" />
+        <TextView android:id="@+id/faqRow" android:layout_width="match_parent" android:layout_height="wrap_content" android:padding="18dp" android:text="FAQ\nTroubleshooting and setup" android:textColor="#20241E" android:textSize="16sp" />
+        <TextView android:id="@+id/updateRow" android:layout_width="match_parent" android:layout_height="wrap_content" android:padding="18dp" android:text="Check for Updates\nVersion 1.9.6" android:textColor="#20241E" android:textSize="16sp" />
     </LinearLayout>
 </ScrollView>
