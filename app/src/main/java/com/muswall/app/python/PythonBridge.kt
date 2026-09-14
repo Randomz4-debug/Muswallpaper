@@ -2,96 +2,82 @@ package com.muswall.app.python
 
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import com.chaquo.python.Python
 import com.chaquo.python.android.AndroidPlatform
-import com.chaquo.python.PyObject
 import com.muswall.app.data.PreferencesManager
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-import java.io.ByteArrayOutputStream
+import java.io.File
 
-/** Lazy, thread-safe bridge to the Python wallpaper renderer. */
 object PythonBridge {
-    @Volatile private var appContext: Context? = null
+    private var started = false
+    private lateinit var appContext: Context
 
     fun initialize(context: Context) {
         appContext = context.applicationContext
-    }
-
-    private fun ensurePython(): Boolean {
-        return try {
-            val context = appContext ?: return false
-            if (!Python.isStarted()) Python.start(AndroidPlatform(context))
-            true
-        } catch (t: Throwable) {
-            android.util.Log.e("MusWallPython", "Python startup failed", t)
-            false
+        if (!started) {
+            if (!Python.isStarted()) Python.start(AndroidPlatform(appContext))
+            started = true
         }
     }
 
-    suspend fun generateWallpaper(
-        srcBitmap: Bitmap,
+    fun generateWallpaper(
+        artwork: Bitmap,
         targetWidth: Int,
         targetHeight: Int,
         blurRadius: Float,
         darkness: Float,
         artScale: Float,
-        cornerRadius: Int = 42,
-        addShadow: Boolean = true,
-        effect: String = "BLUR",
-        blurType: String = "GAUSSIAN",
-        coverHeight: Int = 44,
-        coverOffset: Int = 50,
-        transitionHeight: Int = 20
-    ): Bitmap? = withContext(Dispatchers.Default) {
-        try {
-            if (!ensurePython()) return@withContext null
-            val context = appContext ?: return@withContext null
-            val prefs = PreferencesManager.getInstance(context)
-
+        cornerRadius: Int,
+        addShadow: Boolean,
+        effect: String,
+        blurType: String,
+        coverHeight: Int,
+        coverOffset: Int,
+        transitionHeight: Int,
+        showLyrics: Boolean = false,
+        lyrics: String = "",
+        photoSource: String = PreferencesManager.PHOTO_ALBUM,
+        customPhotoPath: String = ""
+    ): Bitmap? {
+        if (!started) initialize(appContext)
+        val dir = File(appContext.cacheDir, "wallpaper").apply { mkdirs() }
+        val source = File(dir, "source.jpg")
+        val output = File(dir, "result.jpg")
+        return try {
+            source.outputStream().use { artwork.compress(Bitmap.CompressFormat.JPEG, 92, it) }
             val py = Python.getInstance()
-            val module: PyObject = py.getModule("wallpaper_engine")
-            val stream = ByteArrayOutputStream()
-            val source = if (srcBitmap.width > 1600 || srcBitmap.height > 1600) {
-                val scale = minOf(1600f / srcBitmap.width, 1600f / srcBitmap.height)
-                Bitmap.createScaledBitmap(
-                    srcBitmap,
-                    (srcBitmap.width * scale).toInt().coerceAtLeast(1),
-                    (srcBitmap.height * scale).toInt().coerceAtLeast(1),
-                    true
-                )
-            } else srcBitmap
-            source.compress(Bitmap.CompressFormat.JPEG, 84, stream)
-            if (source !== srcBitmap && !source.isRecycled) source.recycle()
-
-            val result = module.callAttr(
-                "process_wallpaper",
-                stream.toByteArray(),
-                targetWidth.coerceIn(480, 900),
-                targetHeight.coerceIn(960, 1800),
-                blurRadius.coerceIn(0f, 100f).toDouble(),
-                darkness.coerceIn(0f, 1f).toDouble(),
-                artScale.coerceIn(0.2f, 1f).toDouble(),
-                cornerRadius.coerceIn(0, 200),
+            val module = py.getModule("wallpaper_engine")
+            module.callAttr(
+                "generate_wallpaper",
+                source.absolutePath,
+                output.absolutePath,
+                targetWidth,
+                targetHeight,
+                blurRadius.toDouble(),
+                darkness.toDouble(),
+                artScale.toDouble(),
+                cornerRadius,
                 addShadow,
                 effect,
                 blurType,
-                coverHeight.coerceIn(0, 100),
-                coverOffset.coerceIn(0, 100),
-                transitionHeight.coerceIn(0, 100),
-                prefs.backgroundMode,
-                prefs.backgroundColor,
-                prefs.backgroundColor2,
-                prefs.accentColor,
-                "JPEG",
-                84
+                coverHeight,
+                coverOffset,
+                transitionHeight,
+                appContext.getSharedPreferences("muswall", Context.MODE_PRIVATE).getString("background_mode", "art"),
+                appContext.getSharedPreferences("muswall", Context.MODE_PRIVATE).getString("background_color", "#101010"),
+                appContext.getSharedPreferences("muswall", Context.MODE_PRIVATE).getString("background_color2", "#303030"),
+                appContext.getSharedPreferences("muswall", Context.MODE_PRIVATE).getString("accent_color", "#FFFFFF"),
+                showLyrics,
+                lyrics,
+                photoSource,
+                customPhotoPath
             )
-            val bytes = result.toJava(ByteArray::class.java)
-            BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+            android.graphics.BitmapFactory.decodeFile(output.absolutePath)
         } catch (t: Throwable) {
-            android.util.Log.e("MusWallPython", "Wallpaper generation failed", t)
+            android.util.Log.e("MusWallPython", "Wallpaper render failed", t)
             null
+        } finally {
+            runCatching { source.delete() }
+            runCatching { output.delete() }
         }
     }
 }
