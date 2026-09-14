@@ -26,7 +26,6 @@ class WallpaperHelper(private val context: Context) {
         const val FILE_ORIGINAL_LOCK = "original_lock_wallpaper.png"
         const val FILE_CURRENT = "current_music_wallpaper.jpg"
         const val FILE_LAST_ARTWORK = "last_album_art.jpg"
-
         fun isXiaomiOrPoco(): Boolean {
             val m = Build.MANUFACTURER.lowercase()
             val b = Build.BRAND.lowercase()
@@ -36,30 +35,20 @@ class WallpaperHelper(private val context: Context) {
 
     fun currentWallpaperFile(): File = File(context.filesDir, FILE_CURRENT)
     fun lastArtworkFile(): File = File(context.filesDir, FILE_LAST_ARTWORK)
-
-    fun originalFile(which: Int): File = File(
-        context.filesDir,
-        if (which == WallpaperManager.FLAG_LOCK) FILE_ORIGINAL_LOCK else FILE_ORIGINAL_HOME
-    )
+    fun originalFile(which: Int): File = File(context.filesDir, if (which == WallpaperManager.FLAG_LOCK) FILE_ORIGINAL_LOCK else FILE_ORIGINAL_HOME)
 
     suspend fun saveLastArtwork(bitmap: Bitmap) = withContext(Dispatchers.IO) {
         val tmp = File(context.filesDir, "$FILE_LAST_ARTWORK.tmp")
         FileOutputStream(tmp).use { bitmap.compress(Bitmap.CompressFormat.JPEG, 90, it) }
         val dst = lastArtworkFile()
-        if (!tmp.renameTo(dst)) {
-            dst.delete()
-            tmp.renameTo(dst)
-        }
+        if (!tmp.renameTo(dst)) { dst.delete(); tmp.renameTo(dst) }
     }
 
     suspend fun saveCurrentForLiveWallpaper(bitmap: Bitmap) = withContext(Dispatchers.IO) {
         val tmp = File(context.filesDir, "$FILE_CURRENT.tmp")
         val dst = currentWallpaperFile()
         FileOutputStream(tmp).use { bitmap.compress(Bitmap.CompressFormat.JPEG, 86, it) }
-        if (!tmp.renameTo(dst)) {
-            dst.delete()
-            tmp.renameTo(dst)
-        }
+        if (!tmp.renameTo(dst)) { dst.delete(); tmp.renameTo(dst) }
         prefs.lastArtworkPath = dst.absolutePath
     }
 
@@ -67,20 +56,11 @@ class WallpaperHelper(private val context: Context) {
         try {
             val destination = originalFile(which)
             val tmp = File(context.filesDir, "${destination.name}.tmp")
-            context.contentResolver.openInputStream(uri)?.use { input ->
-                FileOutputStream(tmp).use { output -> input.copyTo(output, 64 * 1024) }
-            } ?: return@withContext false
-            if (!tmp.renameTo(destination)) {
-                destination.delete()
-                tmp.renameTo(destination)
-            }
-            if (which == WallpaperManager.FLAG_LOCK) prefs.originalLockWallpaperUri = uri.toString()
-            else prefs.originalHomeWallpaperUri = uri.toString()
+            context.contentResolver.openInputStream(uri)?.use { input -> FileOutputStream(tmp).use { output -> input.copyTo(output, 64 * 1024) } } ?: return@withContext false
+            if (!tmp.renameTo(destination)) { destination.delete(); tmp.renameTo(destination) }
+            if (which == WallpaperManager.FLAG_LOCK) prefs.originalLockWallpaperUri = uri.toString() else prefs.originalHomeWallpaperUri = uri.toString()
             true
-        } catch (t: Throwable) {
-            Log.e(TAG, "Saving original wallpaper failed", t)
-            false
-        }
+        } catch (t: Throwable) { Log.e(TAG, "Saving original wallpaper failed", t); false }
     }
 
     suspend fun backupOriginalIfNeeded() = withContext(Dispatchers.IO) {
@@ -94,55 +74,51 @@ class WallpaperHelper(private val context: Context) {
         val uriSet = if (which == WallpaperManager.FLAG_LOCK) prefs.originalLockWallpaperUri.isNotBlank() else prefs.originalHomeWallpaperUri.isNotBlank()
         if (uriSet || destination.exists()) return
         try {
-            if (Build.VERSION.SDK_INT >= 34) {
-                val drawable = wallpaperManager.getDrawable(which)
-                val source = (drawable as? BitmapDrawable)?.bitmap ?: return
-                FileOutputStream(destination).use { source.compress(Bitmap.CompressFormat.PNG, 100, it) }
-            } else if (which == WallpaperManager.FLAG_SYSTEM) {
-                @Suppress("DEPRECATION")
-                val drawable = wallpaperManager.drawable
-                val source = (drawable as? BitmapDrawable)?.bitmap ?: return
-                FileOutputStream(destination).use { source.compress(Bitmap.CompressFormat.PNG, 100, it) }
-            }
-        } catch (t: Throwable) {
-            Log.w(TAG, "Could not back up wallpaper $which", t)
-        }
+            val drawable = wallpaperManager.getDrawable(which)
+            val source = (drawable as? BitmapDrawable)?.bitmap ?: return
+            FileOutputStream(destination).use { source.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        } catch (t: Throwable) { Log.w(TAG, "Could not back up wallpaper $which", t) }
     }
 
     suspend fun applyStatic(bitmap: Bitmap, target: String): ApplyResult = withContext(Dispatchers.IO) {
         backupOriginalIfNeeded()
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
-            return@withContext try {
-                wallpaperManager.setBitmap(bitmap)
-                ApplyResult(true, PreferencesManager.TARGET_BOTH, null)
-            } catch (t: Throwable) {
-                ApplyResult(false, PreferencesManager.TARGET_BOTH, t.message)
-            }
+            return@withContext try { wallpaperManager.setBitmap(bitmap); ApplyResult(true, PreferencesManager.TARGET_BOTH, null) } catch (t: Throwable) { ApplyResult(false, PreferencesManager.TARGET_BOTH, t.message) }
         }
-        val requested = when (target) {
-            PreferencesManager.TARGET_HOME -> listOf(WallpaperManager.FLAG_SYSTEM)
-            PreferencesManager.TARGET_LOCK -> listOf(WallpaperManager.FLAG_LOCK)
-            else -> listOf(WallpaperManager.FLAG_SYSTEM, WallpaperManager.FLAG_LOCK)
-        }
+        val requested = when (target) { PreferencesManager.TARGET_HOME -> listOf(WallpaperManager.FLAG_SYSTEM); PreferencesManager.TARGET_LOCK -> listOf(WallpaperManager.FLAG_LOCK); else -> listOf(WallpaperManager.FLAG_SYSTEM, WallpaperManager.FLAG_LOCK) }
         var successCount = 0
         val errors = mutableListOf<String>()
         for (which in requested) {
-            try {
-                wallpaperManager.setBitmap(bitmap, null, true, which)
-                successCount++
-            } catch (t: Throwable) {
-                val name = if (which == WallpaperManager.FLAG_LOCK) "lock screen" else "home screen"
-                errors += "$name: ${t.message ?: t.javaClass.simpleName}"
-                Log.e(TAG, "Wallpaper apply failed for $name", t)
-            }
+            try { wallpaperManager.setBitmap(bitmap, null, true, which); successCount++ }
+            catch (t: Throwable) { val name = if (which == WallpaperManager.FLAG_LOCK) "lock screen" else "home screen"; errors += "$name: ${t.message ?: t.javaClass.simpleName}"; Log.e(TAG, "Wallpaper apply failed for $name", t) }
         }
         val success = successCount == requested.size
-        val message = when {
-            success -> null
-            successCount > 0 -> "One wallpaper applied; ${errors.joinToString("; ")}"
-            else -> errors.joinToString("; ").ifBlank { "Wallpaper was rejected by the device" }
-        }
+        val message = when { success -> null; successCount > 0 -> "One wallpaper applied; ${errors.joinToString("; ")}"; else -> errors.joinToString("; ").ifBlank { "Wallpaper was rejected by the device" } }
         ApplyResult(success, target, message)
+    }
+
+    /** Updates only the static Lock wallpaper. This is the POCO/MIUI compatibility path. */
+    suspend fun applyLockFrame(bitmap: Bitmap): Boolean = withContext(Dispatchers.IO) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return@withContext false
+        try {
+            backupOriginalIfNeeded()
+            wallpaperManager.setBitmap(bitmap, null, true, WallpaperManager.FLAG_LOCK)
+            true
+        } catch (t: Throwable) {
+            Log.w(TAG, "Lock frame update failed", t)
+            false
+        }
+    }
+
+    suspend fun restoreOriginalLock(): Boolean = withContext(Dispatchers.IO) {
+        val file = originalFile(WallpaperManager.FLAG_LOCK)
+        if (!file.exists()) return@withContext false
+        try {
+            BitmapFactory.decodeFile(file.absolutePath)?.let { bitmap ->
+                try { wallpaperManager.setBitmap(bitmap, null, true, WallpaperManager.FLAG_LOCK); true }
+                finally { if (!bitmap.isRecycled) bitmap.recycle() }
+            } ?: false
+        } catch (t: Throwable) { Log.w(TAG, "Could not restore original lock wallpaper", t); false }
     }
 
     fun openLiveWallpaperPicker() {
@@ -165,10 +141,8 @@ class WallpaperHelper(private val context: Context) {
             if (!file.exists()) continue
             try {
                 BitmapFactory.decodeFile(file.absolutePath)?.let { bitmap ->
-                    try {
-                        wallpaperManager.setBitmap(bitmap, null, true, which)
-                        results += true
-                    } finally { if (!bitmap.isRecycled) bitmap.recycle() }
+                    try { wallpaperManager.setBitmap(bitmap, null, true, which); results += true }
+                    finally { if (!bitmap.isRecycled) bitmap.recycle() }
                 } ?: errors.add("Could not decode original")
             } catch (t: Throwable) { errors += "${if (which == WallpaperManager.FLAG_LOCK) "lock" else "home"}: ${t.message ?: t.javaClass.simpleName}" }
         }
@@ -176,7 +150,6 @@ class WallpaperHelper(private val context: Context) {
     }
 
     fun liveWallpaperOriginal(which: Int): File? = originalFile(which).takeIf { it.exists() }
-
     data class ApplyResult(val success: Boolean, val target: String, val message: String?)
     data class RestoreResult(val success: Boolean, val message: String?)
 }
