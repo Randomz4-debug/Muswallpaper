@@ -16,15 +16,9 @@ import android.view.SurfaceHolder
 import com.muswall.app.data.PreferencesManager
 import java.io.File
 
-/**
- * Real Android live-wallpaper service.
- * It is event driven and keeps the last decoded bitmap in memory, so a track
- * change does not cause a disk decode on every frame.
- */
+/** Event-driven live wallpaper. Music changes replace only the live wallpaper frame. */
 class MusicWallpaperService : WallpaperService() {
-    companion object {
-        const val ACTION_REFRESH = "com.muswall.app.REFRESH_LIVE_WALLPAPER"
-    }
+    companion object { const val ACTION_REFRESH = "com.muswall.app.REFRESH_LIVE_WALLPAPER" }
 
     override fun onCreateEngine(): Engine = MusicEngine()
 
@@ -32,9 +26,7 @@ class MusicWallpaperService : WallpaperService() {
         private val drawThread = HandlerThread("MusWall-LiveDraw").apply { start() }
         private val drawHandler = Handler(drawThread.looper)
         private val mainHandler = Handler(Looper.getMainLooper())
-        private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG or Paint.DITHER_FLAG).apply {
-            isFilterBitmap = true
-        }
+        private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG or Paint.DITHER_FLAG).apply { isFilterBitmap = true }
         private val prefs = PreferencesManager.getInstance(applicationContext)
         private var visible = false
         private var receiverRegistered = false
@@ -69,20 +61,12 @@ class MusicWallpaperService : WallpaperService() {
             super.onCreate(surfaceHolder)
             try {
                 val filter = android.content.IntentFilter(ACTION_REFRESH)
-                if (Build.VERSION.SDK_INT >= 33) {
-                    applicationContext.registerReceiver(
-                        receiver,
-                        filter,
-                        android.content.Context.RECEIVER_NOT_EXPORTED
-                    )
-                } else {
-                    @Suppress("DEPRECATION")
-                    applicationContext.registerReceiver(receiver, filter)
+                if (Build.VERSION.SDK_INT >= 33) applicationContext.registerReceiver(receiver, filter, android.content.Context.RECEIVER_NOT_EXPORTED)
+                else {
+                    @Suppress("DEPRECATION") applicationContext.registerReceiver(receiver, filter)
                 }
                 receiverRegistered = true
-            } catch (t: Throwable) {
-                android.util.Log.e("MusWallLive", "Receiver registration failed", t)
-            }
+            } catch (t: Throwable) { android.util.Log.e("MusWallLive", "Receiver registration failed", t) }
             requestDraw()
         }
 
@@ -97,28 +81,18 @@ class MusicWallpaperService : WallpaperService() {
         }
 
         private fun sourceFile(): File? {
-            if (prefs.liveMusicPlaying) {
-                return File(applicationContext.filesDir, WallpaperHelper.FILE_CURRENT)
-                    .takeIf { it.exists() }
+            // If restore-on-pause is disabled, retain the last generated music frame.
+            if (prefs.liveMusicPlaying || !prefs.restoreOnPause) {
+                return File(applicationContext.filesDir, WallpaperHelper.FILE_CURRENT).takeIf { it.exists() }
             }
-
-            val which = if (Build.VERSION.SDK_INT >= 34) {
-                runCatching { getWallpaperFlags() }.getOrDefault(WallpaperManager.FLAG_SYSTEM)
-            } else {
-                WallpaperManager.FLAG_SYSTEM
-            }
-            val target = if ((which and WallpaperManager.FLAG_LOCK) != 0 &&
-                (which and WallpaperManager.FLAG_SYSTEM) == 0
-            ) WallpaperManager.FLAG_LOCK else WallpaperManager.FLAG_SYSTEM
+            val which = if (Build.VERSION.SDK_INT >= 34) runCatching { getWallpaperFlags() }.getOrDefault(WallpaperManager.FLAG_SYSTEM) else WallpaperManager.FLAG_SYSTEM
+            val target = if ((which and WallpaperManager.FLAG_LOCK) != 0 && (which and WallpaperManager.FLAG_SYSTEM) == 0) WallpaperManager.FLAG_LOCK else WallpaperManager.FLAG_SYSTEM
             return WallpaperHelper(applicationContext).liveWallpaperOriginal(target)
         }
 
         private fun loadBitmap(file: File): Bitmap? {
             val modified = file.lastModified()
-            if (cachedBitmap != null && cachedFilePath == file.absolutePath && cachedModified == modified) {
-                return cachedBitmap
-            }
-
+            if (cachedBitmap != null && cachedFilePath == file.absolutePath && cachedModified == modified) return cachedBitmap
             val opts = BitmapFactory.Options().apply {
                 inPreferredConfig = Bitmap.Config.RGB_565
                 inScaled = false
@@ -140,27 +114,17 @@ class MusicWallpaperService : WallpaperService() {
                 canvas = holder.lockCanvas()
                 if (canvas == null) return
                 canvas.drawColor(Color.BLACK)
-
                 val file = sourceFile() ?: return
                 val bitmap = loadBitmap(file) ?: return
                 if (bitmap.isRecycled) return
-
-                val scale = maxOf(
-                    canvas.width.toFloat() / bitmap.width,
-                    canvas.height.toFloat() / bitmap.height
-                )
+                val scale = maxOf(canvas.width.toFloat() / bitmap.width, canvas.height.toFloat() / bitmap.height)
                 val w = bitmap.width * scale
                 val h = bitmap.height * scale
                 val left = (canvas.width - w) / 2f
                 val top = (canvas.height - h) / 2f
                 canvas.drawBitmap(bitmap, null, RectF(left, top, left + w, top + h), paint)
-            } catch (t: Throwable) {
-                android.util.Log.w("MusWallLive", "Live wallpaper draw failed", t)
-            } finally {
-                if (canvas != null) {
-                    try { holder.unlockCanvasAndPost(canvas) } catch (_: Throwable) {}
-                }
-            }
+            } catch (t: Throwable) { android.util.Log.w("MusWallLive", "Live wallpaper draw failed", t) }
+            finally { if (canvas != null) try { holder.unlockCanvasAndPost(canvas) } catch (_: Throwable) {} }
         }
 
         override fun onDestroy() {
