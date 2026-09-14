@@ -14,6 +14,8 @@ p.write_text(s, encoding='utf-8')
 p = Path('app/src/main/java/com/muswall/app/service/MediaNotificationListenerService.kt')
 s = p.read_text(encoding='utf-8')
 s = s.replace('"else"', '" else "')
+# The previous race fix removed loadLyrics but left one preference-listener call.
+s = s.replace('loadLyrics(it, force = true)', 'handleMetadata(it, true)')
 start = s.index('    private fun handleMetadata(')
 end = s.index('    private fun refreshLive()', start)
 new_handle = '''    private fun handleMetadata(metadata:MediaMetadata?,force:Boolean=false){
