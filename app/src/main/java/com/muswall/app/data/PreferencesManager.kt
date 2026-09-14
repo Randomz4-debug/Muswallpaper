@@ -25,6 +25,11 @@ class PreferencesManager(context: Context) {
         const val BLUR_MOTION = "MOTION"
         const val BLUR_GLASS = "GLASS"
 
+        const val BACKGROUND_ART = "ART"
+        const val BACKGROUND_COLOR = "COLOR"
+        const val BACKGROUND_GRADIENT = "GRADIENT"
+        const val BACKGROUND_AUTO = "AUTO"
+
         fun getInstance(context: Context) = PreferencesManager(context.applicationContext)
     }
 
@@ -80,7 +85,6 @@ class PreferencesManager(context: Context) {
         get() = prefs.getBoolean("live_wallpaper_enabled", false)
         set(v) = prefs.edit().putBoolean("live_wallpaper_enabled", v).apply()
 
-    /** True while the live wallpaper should display the generated music wallpaper. */
     var liveMusicPlaying: Boolean
         get() = prefs.getBoolean("live_music_playing", false)
         set(v) = prefs.edit().putBoolean("live_music_playing", v).apply()
@@ -96,6 +100,22 @@ class PreferencesManager(context: Context) {
     var originalBackedUp: Boolean
         get() = prefs.getBoolean("originals_backed_up", false)
         set(v) = prefs.edit().putBoolean("originals_backed_up", v).apply()
+
+    var backgroundMode: String
+        get() = prefs.getString("background_mode", BACKGROUND_ART) ?: BACKGROUND_ART
+        set(v) = prefs.edit().putString("background_mode", v).apply()
+
+    var backgroundColor: String
+        get() = prefs.getString("background_color", "#111111") ?: "#111111"
+        set(v) = prefs.edit().putString("background_color", v).apply()
+
+    var backgroundColor2: String
+        get() = prefs.getString("background_color_2", "#5E2CA5") ?: "#5E2CA5"
+        set(v) = prefs.edit().putString("background_color_2", v).apply()
+
+    var accentColor: String
+        get() = prefs.getString("accent_color", "#7C00FF") ?: "#7C00FF"
+        set(v) = prefs.edit().putString("accent_color", v).apply()
 
     var lastTrackTitle: String
         get() = prefs.getString("last_track", "") ?: ""
