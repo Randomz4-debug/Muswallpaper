@@ -81,11 +81,17 @@ class MediaNotificationListenerService : NotificationListenerService() {
             controller?.playbackState?.let { handlePlayback(it) }
             return
         }
-        activeController?.unregisterCallback(callback)
+        try { activeController?.unregisterCallback(callback) } catch (_: Throwable) {}
         activeController = controller
-        controller?.registerCallback(callback)
-        handlePlayback(controller?.playbackState)
-        handleMetadata(controller?.metadata)
+        try { controller?.registerCallback(callback) } catch (t: Throwable) {
+            android.util.Log.w("MusWallMedia", "Controller callback failed", t)
+        }
+        try { handlePlayback(controller?.playbackState) } catch (t: Throwable) {
+            android.util.Log.w("MusWallMedia", "Playback state failed", t)
+        }
+        try { handleMetadata(controller?.metadata) } catch (t: Throwable) {
+            android.util.Log.w("MusWallMedia", "Metadata failed", t)
+        }
     }
 
     private fun handlePlayback(state: PlaybackState?) {
@@ -160,33 +166,31 @@ class MediaNotificationListenerService : NotificationListenerService() {
     }
 
     private fun extractArtwork(metadata: MediaMetadata): Bitmap? {
-        // Media callbacks may contain very large album-art bitmaps. Copying a
-        // bounded bitmap here prevents memory spikes on low-RAM devices.
-        metadata.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART)?.let { return downsampleArtwork(it) }
-        metadata.getBitmap(MediaMetadata.METADATA_KEY_ART)?.let { return downsampleArtwork(it) }
-        val uriText = metadata.getString(MediaMetadata.METADATA_KEY_ALBUM_ART_URI)
-            ?: metadata.getString(MediaMetadata.METADATA_KEY_ART_URI)
-        if (!uriText.isNullOrBlank()) {
-            return try {
-                contentResolver.openInputStream(Uri.parse(uriText)).use {
-                    val opts = BitmapFactory.Options().apply {
-                        inPreferredConfig = Bitmap.Config.RGB_565
-                    }
-                    BitmapFactory.decodeStream(it, null, opts)?.let { bmp -> downsampleArtwork(bmp) }
+        return try {
+            metadata.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART)?.let { downsampleArtwork(it) }?.let { return it }
+            metadata.getBitmap(MediaMetadata.METADATA_KEY_ART)?.let { downsampleArtwork(it) }?.let { return it }
+            val uriText = metadata.getString(MediaMetadata.METADATA_KEY_ALBUM_ART_URI)
+                ?: metadata.getString(MediaMetadata.METADATA_KEY_ART_URI)
+            if (!uriText.isNullOrBlank()) {
+                contentResolver.openInputStream(Uri.parse(uriText)).use { input ->
+                    if (input != null) {
+                        val opts = BitmapFactory.Options().apply {
+                            inPreferredConfig = Bitmap.Config.RGB_565
+                        }
+                        BitmapFactory.decodeStream(input, null, opts)?.let { bmp -> downsampleArtwork(bmp) }
+                    } else null
                 }
-            } catch (_: Exception) { null }
+            } else null
+        } catch (t: Throwable) {
+            android.util.Log.w("MusWallMedia", "Artwork extraction failed", t)
+            null
         }
-        return null
     }
 
-    private fun downsampleArtwork(bitmap: Bitmap): Bitmap {
+    private fun downsampleArtwork(bitmap: Bitmap): Bitmap? {
         val max = 900
         return try {
-            val source = if (bitmap.config != Bitmap.Config.ARGB_8888) {
-                bitmap.copy(Bitmap.Config.ARGB_8888, false)
-            } else {
-                bitmap.copy(Bitmap.Config.ARGB_8888, false)
-            } ?: return bitmap
+            val source = bitmap.copy(Bitmap.Config.ARGB_8888, false) ?: return null
             if (source.width <= max && source.height <= max) return source
             val scale = minOf(max.toFloat() / source.width, max.toFloat() / source.height)
             val w = (source.width * scale).toInt().coerceAtLeast(1)
@@ -217,7 +221,7 @@ class MediaNotificationListenerService : NotificationListenerService() {
     override fun onDestroy() {
         generationJob?.cancel()
         try { sessionManager?.removeOnActiveSessionsChangedListener(sessionsListener) } catch (_: Exception) {}
-        activeController?.unregisterCallback(callback)
+        try { activeController?.unregisterCallback(callback) } catch (_: Throwable) {}
         activeController = null
         scope.cancel()
         super.onDestroy()
