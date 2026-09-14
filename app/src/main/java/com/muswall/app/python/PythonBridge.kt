@@ -6,6 +6,7 @@ import android.graphics.BitmapFactory
 import com.chaquo.python.Python
 import com.chaquo.python.android.AndroidPlatform
 import com.chaquo.python.PyObject
+import com.muswall.app.data.PreferencesManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
@@ -21,9 +22,7 @@ object PythonBridge {
     private fun ensurePython(): Boolean {
         return try {
             val context = appContext ?: return false
-            if (!Python.isStarted()) {
-                Python.start(AndroidPlatform(context))
-            }
+            if (!Python.isStarted()) Python.start(AndroidPlatform(context))
             true
         } catch (t: Throwable) {
             android.util.Log.e("MusWallPython", "Python startup failed", t)
@@ -48,11 +47,12 @@ object PythonBridge {
     ): Bitmap? = withContext(Dispatchers.Default) {
         try {
             if (!ensurePython()) return@withContext null
+            val context = appContext ?: return@withContext null
+            val prefs = PreferencesManager.getInstance(context)
 
             val py = Python.getInstance()
             val module: PyObject = py.getModule("wallpaper_engine")
             val stream = ByteArrayOutputStream()
-            // Avoid feeding oversized source bitmaps into Python.
             val source = if (srcBitmap.width > 1600 || srcBitmap.height > 1600) {
                 val scale = minOf(1600f / srcBitmap.width, 1600f / srcBitmap.height)
                 Bitmap.createScaledBitmap(
@@ -62,7 +62,7 @@ object PythonBridge {
                     true
                 )
             } else srcBitmap
-            source.compress(Bitmap.CompressFormat.JPEG, 82, stream)
+            source.compress(Bitmap.CompressFormat.JPEG, 84, stream)
             if (source !== srcBitmap && !source.isRecycled) source.recycle()
 
             val result = module.callAttr(
@@ -80,8 +80,12 @@ object PythonBridge {
                 coverHeight.coerceIn(0, 100),
                 coverOffset.coerceIn(0, 100),
                 transitionHeight.coerceIn(0, 100),
+                prefs.backgroundMode,
+                prefs.backgroundColor,
+                prefs.backgroundColor2,
+                prefs.accentColor,
                 "JPEG",
-                82
+                84
             )
             val bytes = result.toJava(ByteArray::class.java)
             BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
