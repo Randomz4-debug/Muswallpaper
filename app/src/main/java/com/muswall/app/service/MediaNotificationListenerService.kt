@@ -56,7 +56,7 @@ class MediaNotificationListenerService : NotificationListenerService() {
         broadcastTrack(title,artist)
         val artUri=metadata.getString(MediaMetadata.METADATA_KEY_ALBUM_ART_URI)?:metadata.getString(MediaMetadata.METADATA_KEY_ART_URI).orEmpty()
         val mediaId=metadata.getString(MediaMetadata.METADATA_KEY_MEDIA_ID).orEmpty()
-        val id=mediaId+"\u0000"+title+"\u0000"+artist+"\u0000"+artUri
+        val id=mediaId+"|"+title+"|"+artist+"|"+artUri
         if(!force&&id==currentTrackId)return
         currentTrackId=id
         prefs.lyricsPosition=activeController?.playbackState?.position?.coerceAtLeast(0L)?:prefs.lyricsPosition
@@ -68,11 +68,7 @@ class MediaNotificationListenerService : NotificationListenerService() {
             val art=extractArtwork(metadata)
             try{
                 val immediate=findImmediateLyrics(metadata)
-                if(prefs.showLyrics){
-                    prefs.lastLyrics=immediate?:"[00:00.00] Loading lyrics…"
-                    refreshLive()
-                }
-                // Never wait for LRCLIB or translation before showing the wallpaper.
+                if(prefs.showLyrics){prefs.lastLyrics=immediate?:"[00:00.00] Loading lyrics…";refreshLive()}
                 if(art!=null)renderAndSendToLiveWallpaper(art,token,prefs.lastLyrics)else refreshLive()
                 if(prefs.showLyrics){
                     val resolved=if(immediate!=null)immediate else resolveLyrics(metadata,title,artist)
@@ -99,8 +95,38 @@ class MediaNotificationListenerService : NotificationListenerService() {
     private suspend fun renderAndSendToLiveWallpaper(artwork:Bitmap,token:Long,lyrics:String){if(token!=generation.get()||!playing||!prefs.liveWallpaperEnabled)return;val dm=resources.displayMetrics;val targetW=(dm.widthPixels*.70f).toInt().coerceIn(480,1080);val targetH=(dm.heightPixels*.70f).toInt().coerceIn(900,1920);wallpaperHelper.saveLastArtwork(artwork);val result=PythonBridge.generateWallpaper(artwork,targetW,targetH,prefs.blurRadius.toFloat(),prefs.darkness/100f,prefs.artScale/100f,42,true,prefs.effect,prefs.blurType,prefs.coverHeight,prefs.coverOffset,prefs.transitionHeight,false,"",prefs.photoSource,"")?:return;try{if(token!=generation.get()||!playing||!prefs.liveWallpaperEnabled)return;wallpaperHelper.saveCurrentForLiveWallpaper(result);if(!isOurLockLiveWallpaper())wallpaperHelper.applyLockFrame(result);prefs.liveMusicPlaying=true;refreshLive();broadcastWallpaperApplied(if(prefs.showLyrics&&lyrics.isNotBlank())"Live wallpaper + synced lyrics updated"else"Live wallpaper updated")}finally{if(!result.isRecycled)result.recycle()}}
     private fun hasLrcTimestamps(text:String)=Regex("\\[\\d{1,3}:\\d{2}(?:[.:]\\d{1,3})?\\]").containsMatchIn(text)
     private fun resolveLyrics(metadata:MediaMetadata,title:String,artist:String):String{val direct=metadata.getString("android.media.metadata.LYRICS")?.trim().orEmpty();if(hasLrcTimestamps(direct))return translateIfNeeded(direct);for(key in metadata.keySet()){val v=metadata.getString(key)?.trim().orEmpty();if(key.contains("lyric",true)&&hasLrcTimestamps(v))return translateIfNeeded(v)};fetchLyricsFromLrcLib(metadata,title,artist,true)?.takeIf{it.isNotBlank()}?.let{return translateIfNeeded(it)};val plain=direct.takeIf{it.isNotBlank()}?:metadata.keySet().firstNotNullOfOrNull{key->if(key.contains("lyric",true))metadata.getString(key)?.trim()?.takeIf{it.isNotBlank()}else null};return translateIfNeeded(plain?:fetchLyricsFromLrcLib(metadata,title,artist,false).orEmpty())}
-    private fun translateIfNeeded(raw:String):String{val lang=prefs.lyricsLanguage.trim().lowercase();if(lang.isBlank()||lang=="original"||lang=="auto")return raw;return try{val lines=raw.replace("\r","").split('\n');val out=ArrayList<String>();var i=0;while(i<lines.size){val chunkLines=ArrayList<String>();var chars=0;while(i<lines.size&&chars+lines[i].length<420){chunkLines+=lines[i];chars+=lines[i].length+1;i++};val prefixes=chunkLines.map{Regex("^(\\s*\\[[^]]+\\]\\s*)").find(it)?.value?:""};val texts=chunkLines.mapIndexed{idx,line->line.removePrefix(prefixes[idx])};val translated=translateChunk(texts.joinToString("\n"),lang).split('\n');if(translated.size==texts.size)chunkLines.forEachIndexed{idx,_->out+=prefixes[idx]+translated[idx]}else out+=chunkLines;};out.joinToString("\n")}catch(_:Throwable){raw}}
-    private fun translateChunk(chunk:String,language:String):String{try{val q=URLEncoder.encode(chunk,"UTF-8");val target=URLEncoder.encode(language,"UTF-8");val url=URL("https://api.mymemory.translated.net/get?q="+q+"&langpair=auto%7C"+target);val c=(url.openConnection()as HttpURLConnection).apply{requestMethod="GET";connectTimeout=4000;readTimeout=5000;setRequestProperty("User-Agent","MusWall/4.0")};try{if(c.responseCode !in 200..299)return chunk;return JSONObject(c.inputStream.bufferedReader().use{it.readText()}).optJSONObject("responseData")?.optString("translatedText")?.takeIf{it.isNotBlank()}?:chunk}finally{c.disconnect()}}catch(_:Throwable){return chunk}}
+    private fun translateIfNeeded(raw:String):String{
+        val lang=prefs.lyricsLanguage.trim().lowercase()
+        if(lang.isBlank()||lang=="original"||lang=="auto")return raw
+        return try{
+            val lines=raw.replace("\r","").split('\n')
+            val out=ArrayList<String>()
+            var i=0
+            while(i<lines.size){
+                val chunkLines=ArrayList<String>()
+                var chars=0
+                while(i<lines.size&&chars+lines[i].length<420){chunkLines+=lines[i];chars+=lines[i].length+1;i++}
+                val prefixes=chunkLines.map{Regex("^(\\s*\\[[^]]+\\]\\s*)").find(it)?.value?:""}
+                val texts=chunkLines.mapIndexed{idx,line->line.removePrefix(prefixes[idx])}
+                val translated=translateChunk(texts.joinToString("\n"),lang).split('\n')
+                if(translated.size==texts.size)chunkLines.forEachIndexed{idx,_->out+=prefixes[idx]+translated[idx]}else out+=chunkLines
+            }
+            out.joinToString("\n")
+        }catch(_:Throwable){raw}
+    }
+    private fun translateChunk(chunk:String,language:String):String{
+        return try{
+            val q=URLEncoder.encode(chunk,"UTF-8")
+            val target=URLEncoder.encode(language,"UTF-8")
+            val url=URL("https://api.mymemory.translated.net/get?q="+q+"&langpair=auto%7C"+target)
+            val c=url.openConnection() as HttpURLConnection
+            c.requestMethod="GET";c.connectTimeout=4000;c.readTimeout=5000;c.setRequestProperty("User-Agent","MusWall/4.0")
+            try{
+                if(c.responseCode !in 200..299)return chunk
+                JSONObject(c.inputStream.bufferedReader().use{it.readText()}).optJSONObject("responseData")?.optString("translatedText")?.takeIf{it.isNotBlank()}?:chunk
+            }finally{c.disconnect()}
+        }catch(_:Throwable){chunk}
+    }
     private fun fetchLyricsFromLrcLib(metadata:MediaMetadata,title:String,artist:String,syncedOnly:Boolean):String?{val duration=metadata.getLong(MediaMetadata.METADATA_KEY_DURATION).coerceAtLeast(0L);return try{val uri=Uri.Builder().scheme("https").authority("lrclib.net").appendPath("api").appendPath("get").appendQueryParameter("track_name",title).appendQueryParameter("artist_name",artist).apply{metadata.getString(MediaMetadata.METADATA_KEY_ALBUM)?.takeIf{it.isNotBlank()}?.let{appendQueryParameter("album_name",it)};if(duration>0)appendQueryParameter("duration",(duration/1000L).toString())}.build();val c=(URL(uri.toString()).openConnection()as HttpURLConnection).apply{requestMethod="GET";connectTimeout=3000;readTimeout=4500;setRequestProperty("Accept","application/json");setRequestProperty("User-Agent","MusWall/4.0")};try{if(c.responseCode !in 200..299)return null;val root=JSONObject(c.inputStream.bufferedReader().use{it.readText()});if(syncedOnly)root.optString("syncedLyrics").trim().takeIf{it.isNotBlank()}else root.optString("syncedLyrics").trim().takeIf{it.isNotBlank()}?:root.optString("plainLyrics").trim().takeIf{it.isNotBlank()}}finally{c.disconnect()}}catch(t:Throwable){android.util.Log.d("MusWallLyrics","Lyrics lookup failed",t);null}}
     private fun extractArtwork(metadata:MediaMetadata):Bitmap?{return try{metadata.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART)?.let{downsampleArtwork(it)}?.let{return it};metadata.getBitmap(MediaMetadata.METADATA_KEY_ART)?.let{downsampleArtwork(it)}?.let{return it};val uriText=metadata.getString(MediaMetadata.METADATA_KEY_ALBUM_ART_URI)?:metadata.getString(MediaMetadata.METADATA_KEY_ART_URI);if(uriText.isNullOrBlank())return null;contentResolver.openInputStream(Uri.parse(uriText)).use{input->if(input==null)return@use null;val decoded=BitmapFactory.decodeStream(input)?:return@use null;val output=downsampleArtwork(decoded);if(output!==decoded&&!decoded.isRecycled)decoded.recycle();output}}catch(t:Throwable){android.util.Log.w("MusWallMedia","Artwork extraction failed",t);null}}
     private fun downsampleArtwork(bitmap:Bitmap):Bitmap?{return try{val max=900;val source=bitmap.copy(Bitmap.Config.ARGB_8888,false)?:return null;if(source.width<=max&&source.height<=max)return source;val scale=minOf(max.toFloat()/source.width,max.toFloat()/source.height);val w=(source.width*scale).toInt().coerceAtLeast(1);val h=(source.height*scale).toInt().coerceAtLeast(1);Bitmap.createScaledBitmap(source,w,h,true).also{if(it!==source&&!source.isRecycled)source.recycle()}}catch(_:Throwable){null}}
