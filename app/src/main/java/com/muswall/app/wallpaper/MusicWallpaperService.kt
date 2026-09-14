@@ -112,8 +112,6 @@ class MusicWallpaperService : WallpaperService() {
             return result.sortedBy { it.time }
         }
 
-        private data class VisibleLyric(val line: LyricLine, val active: Boolean)
-
         private fun currentLyricLines(): List<Pair<LyricLine, Boolean>> {
             if (!prefs.showLyrics) return emptyList()
             val raw = prefs.lastLyrics.trim()
