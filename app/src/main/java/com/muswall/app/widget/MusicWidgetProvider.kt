@@ -31,11 +31,15 @@ class MusicWidgetProvider : AppWidgetProvider() {
     private fun updateAll(context: Context, manager: AppWidgetManager=AppWidgetManager.getInstance(context), ids:IntArray?=null){
         val widgetIds=ids?:manager.getAppWidgetIds(ComponentName(context,MusicWidgetProvider::class.java)); val prefs=PreferencesManager.getInstance(context)
         widgetIds.forEach { id ->
-            val views=RemoteViews(context.packageName,R.layout.widget_music); val bg=runCatching{Color.parseColor(prefs.widgetBackgroundColor)}.getOrDefault(Color.rgb(23,21,31))
+            val views=RemoteViews(context.packageName,R.layout.widget_music)
+            val bg=runCatching{Color.parseColor(prefs.widgetBackgroundColor)}.getOrDefault(Color.rgb(23,21,31))
+            val bar=runCatching{Color.parseColor(prefs.widgetBarColor)}.getOrDefault(Color.WHITE)
             views.setInt(R.id.widgetRoot,"setBackgroundColor",Color.argb((255*prefs.widgetOpacity/100f).toInt(),Color.red(bg),Color.green(bg),Color.blue(bg)))
             views.setViewPadding(R.id.widgetRoot,prefs.widgetPadding,prefs.widgetPadding,prefs.widgetPadding,prefs.widgetPadding)
-            views.setViewLayoutWidth(R.id.widgetArt,prefs.widgetArtworkSize.toFloat(),TypedValue.COMPLEX_UNIT_DIP); views.setViewLayoutHeight(R.id.widgetArt,prefs.widgetArtworkSize.toFloat(),TypedValue.COMPLEX_UNIT_DIP)
             views.setViewOutlinePreferredRadius(R.id.widgetRoot,prefs.widgetCornerRadius.toFloat(),TypedValue.COMPLEX_UNIT_DIP)
+            views.setInt(R.id.widgetGlassBar,"setBackgroundColor",Color.argb((255*prefs.widgetBarOpacity/100f).toInt(),Color.red(bar),Color.green(bar),Color.blue(bar)))
+            views.setViewVisibility(R.id.widgetGlassBar,if(prefs.widgetBarEnabled)View.VISIBLE else View.GONE)
+            views.setViewLayoutWidth(R.id.widgetArt,prefs.widgetArtworkSize.toFloat(),TypedValue.COMPLEX_UNIT_DIP); views.setViewLayoutHeight(R.id.widgetArt,prefs.widgetArtworkSize.toFloat(),TypedValue.COMPLEX_UNIT_DIP)
             val title=prefs.lastTrackTitle.ifBlank{prefs.widgetEmptyTitle}; val artist=prefs.lastArtist.ifBlank{"MusWall"}; val status=when(prefs.lastPlaybackState){"playing"->"● Playing";"paused"->"Ⅱ Paused";else->"Last played"}
             views.setTextViewText(R.id.widgetTitle,title);views.setTextViewText(R.id.widgetArtist,artist);views.setTextViewText(R.id.widgetCustomText,prefs.widgetCustomText);views.setTextViewText(R.id.widgetTime,if(prefs.widgetShowTime)"${prefs.widgetCustomTimeLabel} • $status" else status)
             views.setTextViewTextSize(R.id.widgetTitle,TypedValue.COMPLEX_UNIT_SP,prefs.widgetTitleSize.toFloat());views.setTextViewTextSize(R.id.widgetArtist,TypedValue.COMPLEX_UNIT_SP,prefs.widgetArtistSize.toFloat());views.setTextViewTextSize(R.id.widgetCustomText,TypedValue.COMPLEX_UNIT_SP,prefs.widgetCustomTextSize.toFloat())
