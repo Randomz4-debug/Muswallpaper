@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android" android:layout_width="match_parent" android:layout_height="match_parent" android:background="#0B0910" android:fillViewport="true">
+<LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:padding="20dp">
+<TextView android:id="@+id/widgetBack" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="‹  Widget" android:textColor="#FFFFFF" android:textSize="28sp" android:padding="4dp"/>
+<TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Music Widget" android:textColor="#FFFFFF" android:textSize="30sp" android:textStyle="bold" android:layout_marginTop="8dp"/>
+<TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Control exactly what appears on your launcher widget." android:textColor="#AAA6B5" android:textSize="14sp" android:layout_marginTop="4dp"/>
+<TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="CONTENT" android:textColor="#A78BFA" android:textSize="13sp" android:textStyle="bold" android:layout_marginTop="24dp"/>
+<LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:background="#17131F" android:padding="8dp" android:layout_marginTop="8dp">
+<include layout="@layout/widget_setting_switch" android:id="@+id/rowArtwork" />
+<include layout="@layout/widget_setting_switch" android:id="@+id/rowTitle" />
+<include layout="@layout/widget_setting_switch" android:id="@+id/rowArtist" />
+<include layout="@layout/widget_setting_switch" android:id="@+id/rowControls" />
+<include layout="@layout/widget_setting_switch" android:id="@+id/rowProgress" />
+<include layout="@layout/widget_setting_switch" android:id="@+id/rowCustom" />
+<include layout="@layout/widget_setting_switch" android:id="@+id/rowTime" />
+</LinearLayout>
+<TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="APPEARANCE" android:textColor="#A78BFA" android:textSize="13sp" android:textStyle="bold" android:layout_marginTop="24dp"/>
+<TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Transparency" android:textColor="#FFFFFF" android:textSize="15sp" android:layout_marginTop="8dp"/>
+<SeekBar android:id="@+id/widgetOpacity" android:layout_width="match_parent" android:layout_height="wrap_content" android:max="100"/>
+<TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Title size" android:textColor="#FFFFFF" android:textSize="15sp"/>
+<SeekBar android:id="@+id/widgetTitleSize" android:layout_width="match_parent" android:layout_height="wrap_content"/>
+<TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Artist size" android:textColor="#FFFFFF" android:textSize="15sp"/>
+<SeekBar android:id="@+id/widgetArtistSize" android:layout_width="match_parent" android:layout_height="wrap_content"/>
+<TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Custom text size" android:textColor="#FFFFFF" android:textSize="15sp"/>
+<SeekBar android:id="@+id/widgetCustomSize" android:layout_width="match_parent" android:layout_height="wrap_content"/>
+<TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="TEXT &amp; COLORS" android:textColor="#A78BFA" android:textSize="13sp" android:textStyle="bold" android:layout_marginTop="24dp"/>
+<EditText android:id="@+id/widgetCustomText" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="Custom text" android:textColor="#FFFFFF" android:hintTextColor="#77717F"/>
+<EditText android:id="@+id/widgetEmptyText" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="Text when no music is playing" android:textColor="#FFFFFF" android:hintTextColor="#77717F"/>
+<EditText android:id="@+id/widgetTimeLabel" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="Time/status label" android:textColor="#FFFFFF" android:hintTextColor="#77717F"/>
+<EditText android:id="@+id/widgetTextColor" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="#FFFFFF — title/custom text" android:textColor="#FFFFFF"/>
+<EditText android:id="@+id/widgetSecondaryColor" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="#C7C7D0 — artist/secondary" android:textColor="#FFFFFF"/>
+<EditText android:id="@+id/widgetBackgroundColor" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="#17151F — background" android:textColor="#FFFFFF"/>
+<TextView android:id="@+id/widgetSave" android:layout_width="match_parent" android:layout_height="54dp" android:gravity="center" android:text="SAVE WIDGET" android:textColor="#FFFFFF" android:textStyle="bold" android:background="#7C5CFF" android:layout_marginTop="20dp" android:layout_marginBottom="30dp"/>
+</LinearLayout></ScrollView>
