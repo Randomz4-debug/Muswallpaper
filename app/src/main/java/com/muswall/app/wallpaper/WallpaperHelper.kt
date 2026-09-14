@@ -51,10 +51,6 @@ class WallpaperHelper(private val context: Context) {
         prefs.lastArtworkPath = dst.absolutePath
     }
 
-    /**
-     * Copies a user-selected image into app-private storage so the live wallpaper
-     * can read it instantly without repeatedly opening a content URI.
-     */
     suspend fun setOriginalFromUri(uri: Uri, which: Int): Boolean = withContext(Dispatchers.IO) {
         try {
             val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
@@ -80,10 +76,7 @@ class WallpaperHelper(private val context: Context) {
         }
     }
 
-    /**
-     * Best-effort backup for devices that allow an app to read the current static
-     * wallpaper. User-selected originals remain the preferred path on Android 14+.
-     */
+    /** Best-effort backup; Android 14+ may restrict reading the current wallpaper. */
     suspend fun backupOriginalIfNeeded() = withContext(Dispatchers.IO) {
         backupOneIfMissing(WallpaperManager.FLAG_SYSTEM)
         backupOneIfMissing(WallpaperManager.FLAG_LOCK)
@@ -101,21 +94,15 @@ class WallpaperHelper(private val context: Context) {
         if (uriSet || destination.exists()) return
 
         try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            if (Build.VERSION.SDK_INT >= 34) {
                 val drawable = wallpaperManager.getDrawable(which)
                 val source = (drawable as? BitmapDrawable)?.bitmap ?: return
-                FileOutputStream(destination).use {
-                    source.compress(Bitmap.CompressFormat.PNG, 100, it)
-                }
-                if (drawable is BitmapDrawable && drawable.bitmap !== source && !source.isRecycled) {
-                    source.recycle()
-                }
-            } else {
+                FileOutputStream(destination).use { source.compress(Bitmap.CompressFormat.PNG, 100, it) }
+            } else if (which == WallpaperManager.FLAG_SYSTEM) {
+                @Suppress("DEPRECATION")
                 val drawable = wallpaperManager.drawable
                 val source = (drawable as? BitmapDrawable)?.bitmap ?: return
-                FileOutputStream(destination).use {
-                    source.compress(Bitmap.CompressFormat.PNG, 100, it)
-                }
+                FileOutputStream(destination).use { source.compress(Bitmap.CompressFormat.PNG, 100, it) }
             }
         } catch (t: Throwable) {
             Log.w(TAG, "Could not automatically back up wallpaper $which", t)
@@ -143,8 +130,6 @@ class WallpaperHelper(private val context: Context) {
         val errors = mutableListOf<String>()
         for (which in requested) {
             try {
-                // Setting each destination independently is more reliable on Xiaomi/POCO
-                // than a single combined FLAG_SYSTEM | FLAG_LOCK call.
                 wallpaperManager.setBitmap(bitmap, null, true, which)
                 successCount++
             } catch (t: Throwable) {
@@ -177,7 +162,6 @@ class WallpaperHelper(private val context: Context) {
         }
     }
 
-    /** Restores the two separately selected/cached static wallpapers. */
     suspend fun restoreOriginal(): RestoreResult = withContext(Dispatchers.IO) {
         val results = mutableListOf<Boolean>()
         val errors = mutableListOf<String>()
@@ -200,10 +184,7 @@ class WallpaperHelper(private val context: Context) {
         RestoreResult(results.isNotEmpty() && results.all { it }, errors.joinToString("; ").ifBlank { null })
     }
 
-    fun liveWallpaperOriginal(which: Int): File? {
-        val file = originalFile(which)
-        return file.takeIf { it.exists() }
-    }
+    fun liveWallpaperOriginal(which: Int): File? = originalFile(which).takeIf { it.exists() }
 
     data class ApplyResult(val success: Boolean, val target: String, val message: String?)
     data class RestoreResult(val success: Boolean, val message: String?)
