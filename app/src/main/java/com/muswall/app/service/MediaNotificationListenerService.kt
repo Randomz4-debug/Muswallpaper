@@ -6,7 +6,6 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
-import android.graphics.drawable.Icon
 import android.media.MediaMetadata
 import android.media.session.MediaController
 import android.media.session.MediaSessionManager
@@ -86,6 +85,12 @@ class MediaNotificationListenerService : NotificationListenerService() {
 
     override fun onListenerConnected() {
         super.onListenerConnected()
+        // NotificationListenerService may connect after the music notification
+        // already exists. Cache those notifications immediately instead of
+        // waiting for another notification event.
+        try { activeNotifications?.forEach { cacheNotificationArtwork(it) } } catch (t: Throwable) {
+            android.util.Log.w(TAG, "Initial notification artwork scan failed", t)
+        }
         connectSessions()
     }
 
@@ -380,8 +385,6 @@ class MediaNotificationListenerService : NotificationListenerService() {
 
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
         if (sbn == null) return
-        // Do this before refreshing sessions so the artwork is available if the
-        // MediaSession metadata itself has no usable image.
         cacheNotificationArtwork(sbn)
         refreshActiveSessions()
     }
