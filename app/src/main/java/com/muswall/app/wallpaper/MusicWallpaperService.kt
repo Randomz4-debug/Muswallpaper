@@ -1,21 +1,25 @@
 package com.muswall.app.wallpaper
 
+import android.app.WallpaperManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.RectF
+import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.Looper
 import android.service.wallpaper.WallpaperService
 import android.view.SurfaceHolder
+import com.muswall.app.data.PreferencesManager
 import java.io.File
 
 /**
  * Real Android live-wallpaper service.
- * It is event driven: the engine redraws only after MusWall produces a new
- * wallpaper, rather than running a permanent animation loop.
+ * It is event driven and keeps the last decoded bitmap in memory, so a track
+ * change does not cause a disk decode on every frame.
  */
 class MusicWallpaperService : WallpaperService() {
     companion object {
@@ -28,17 +32,20 @@ class MusicWallpaperService : WallpaperService() {
         private val drawThread = HandlerThread("MusWall-LiveDraw").apply { start() }
         private val drawHandler = Handler(drawThread.looper)
         private val mainHandler = Handler(Looper.getMainLooper())
-        private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+        private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG or Paint.DITHER_FLAG).apply {
+            isFilterBitmap = true
+        }
+        private val prefs = PreferencesManager.getInstance(applicationContext)
         private var visible = false
         private var receiverRegistered = false
+        private var cachedFilePath = ""
+        private var cachedModified = Long.MIN_VALUE
+        private var cachedBitmap: Bitmap? = null
 
         private val refreshRunnable = Runnable { drawWallpaper() }
         private val receiver = object : android.content.BroadcastReceiver() {
             override fun onReceive(context: android.content.Context?, intent: android.content.Intent?) {
-                if (intent?.action == ACTION_REFRESH) {
-                    drawHandler.removeCallbacks(refreshRunnable)
-                    drawHandler.post(refreshRunnable)
-                }
+                if (intent?.action == ACTION_REFRESH) requestDraw()
             }
         }
 
@@ -54,7 +61,7 @@ class MusicWallpaperService : WallpaperService() {
 
         override fun onSurfaceDestroyed(holder: SurfaceHolder) {
             visible = false
-            drawHandler.removeCallbacksAndMessages(null)
+            drawHandler.removeCallbacks(refreshRunnable)
             super.onSurfaceDestroyed(holder)
         }
 
@@ -62,7 +69,7 @@ class MusicWallpaperService : WallpaperService() {
             super.onCreate(surfaceHolder)
             try {
                 val filter = android.content.IntentFilter(ACTION_REFRESH)
-                if (android.os.Build.VERSION.SDK_INT >= 33) {
+                if (Build.VERSION.SDK_INT >= 33) {
                     applicationContext.registerReceiver(
                         receiver,
                         filter,
@@ -76,6 +83,12 @@ class MusicWallpaperService : WallpaperService() {
             } catch (t: Throwable) {
                 android.util.Log.e("MusWallLive", "Receiver registration failed", t)
             }
+            requestDraw()
+        }
+
+        override fun onWallpaperFlagsChanged(which: Int) {
+            super.onWallpaperFlagsChanged(which)
+            requestDraw()
         }
 
         private fun requestDraw() {
@@ -83,45 +96,67 @@ class MusicWallpaperService : WallpaperService() {
             drawHandler.post(refreshRunnable)
         }
 
+        private fun sourceFile(): File? {
+            if (prefs.liveMusicPlaying) {
+                return File(applicationContext.filesDir, WallpaperHelper.FILE_CURRENT)
+                    .takeIf { it.exists() }
+            }
+
+            val which = if (Build.VERSION.SDK_INT >= 34) {
+                runCatching { getWallpaperFlags() }.getOrDefault(WallpaperManager.FLAG_SYSTEM)
+            } else {
+                WallpaperManager.FLAG_SYSTEM
+            }
+            val target = if ((which and WallpaperManager.FLAG_LOCK) != 0 &&
+                (which and WallpaperManager.FLAG_SYSTEM) == 0
+            ) WallpaperManager.FLAG_LOCK else WallpaperManager.FLAG_SYSTEM
+            return WallpaperHelper(applicationContext).liveWallpaperOriginal(target)
+        }
+
+        private fun loadBitmap(file: File): Bitmap? {
+            val modified = file.lastModified()
+            if (cachedBitmap != null && cachedFilePath == file.absolutePath && cachedModified == modified) {
+                return cachedBitmap
+            }
+
+            val opts = BitmapFactory.Options().apply {
+                inPreferredConfig = Bitmap.Config.RGB_565
+                inScaled = false
+                inDither = true
+            }
+            val decoded = BitmapFactory.decodeFile(file.absolutePath, opts) ?: return cachedBitmap
+            cachedBitmap?.let { if (!it.isRecycled) it.recycle() }
+            cachedBitmap = decoded
+            cachedFilePath = file.absolutePath
+            cachedModified = modified
+            return decoded
+        }
+
         private fun drawWallpaper() {
             if (!visible) return
             val holder = surfaceHolder
             var canvas: Canvas? = null
-            var bitmap: Bitmap? = null
             try {
                 canvas = holder.lockCanvas()
                 if (canvas == null) return
                 canvas.drawColor(Color.BLACK)
 
-                val file = File(applicationContext.filesDir, WallpaperHelper.FILE_CURRENT)
-                if (!file.exists()) return
+                val file = sourceFile() ?: return
+                val bitmap = loadBitmap(file) ?: return
+                if (bitmap.isRecycled) return
 
-                val opts = BitmapFactory.Options().apply {
-                    inPreferredConfig = Bitmap.Config.RGB_565
-                    inSampleSize = 1
-                }
-                bitmap = BitmapFactory.decodeFile(file.absolutePath, opts)
-                if (bitmap == null || bitmap!!.isRecycled) return
-
-                val b = bitmap!!
                 val scale = maxOf(
-                    canvas.width.toFloat() / b.width,
-                    canvas.height.toFloat() / b.height
+                    canvas.width.toFloat() / bitmap.width,
+                    canvas.height.toFloat() / bitmap.height
                 )
-                val w = b.width * scale
-                val h = b.height * scale
+                val w = bitmap.width * scale
+                val h = bitmap.height * scale
                 val left = (canvas.width - w) / 2f
                 val top = (canvas.height - h) / 2f
-                canvas.drawBitmap(
-                    b,
-                    null,
-                    android.graphics.RectF(left, top, left + w, top + h),
-                    paint
-                )
+                canvas.drawBitmap(bitmap, null, RectF(left, top, left + w, top + h), paint)
             } catch (t: Throwable) {
                 android.util.Log.w("MusWallLive", "Live wallpaper draw failed", t)
             } finally {
-                bitmap?.recycle()
                 if (canvas != null) {
                     try { holder.unlockCanvasAndPost(canvas) } catch (_: Throwable) {}
                 }
@@ -135,7 +170,10 @@ class MusicWallpaperService : WallpaperService() {
                 try { applicationContext.unregisterReceiver(receiver) } catch (_: Throwable) {}
                 receiverRegistered = false
             }
+            cachedBitmap?.let { if (!it.isRecycled) it.recycle() }
+            cachedBitmap = null
             drawThread.quitSafely()
+            mainHandler.removeCallbacksAndMessages(null)
             super.onDestroy()
         }
     }
