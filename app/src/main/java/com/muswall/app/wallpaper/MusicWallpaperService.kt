@@ -21,10 +21,7 @@ import kotlin.math.sin
 
 /** Efficient live wallpaper with track-aware lyric and bass overlays. */
 class MusicWallpaperService : WallpaperService() {
-    companion object {
-        const val ACTION_REFRESH = "com.muswall.app.REFRESH_LIVE_WALLPAPER"
-    }
-
+    companion object { const val ACTION_REFRESH = "com.muswall.app.REFRESH_LIVE_WALLPAPER" }
     override fun onCreateEngine(): Engine = MusicEngine()
 
     inner class MusicEngine : Engine() {
@@ -40,7 +37,6 @@ class MusicWallpaperService : WallpaperService() {
         private var cachedModified = Long.MIN_VALUE
         private var cachedBitmap: Bitmap? = null
         private var playbackPosition = 0L
-        private var lastFrame = 0L
 
         private val refreshRunnable = Runnable { drawWallpaper() }
         private val receiver = object : android.content.BroadcastReceiver() {
@@ -55,36 +51,25 @@ class MusicWallpaperService : WallpaperService() {
             }
         }
 
-        override fun onVisibilityChanged(isVisible: Boolean) {
-            visible = isVisible
-            if (isVisible) requestDraw(force = true)
-        }
-
-        override fun onSurfaceCreated(holder: SurfaceHolder) { super.onSurfaceCreated(holder); requestDraw(force = true) }
-        override fun onSurfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) { super.onSurfaceChanged(holder, format, width, height); requestDraw(force = true) }
-        override fun onSurfaceRedrawNeeded(holder: SurfaceHolder) { super.onSurfaceRedrawNeeded(holder); requestDraw(force = true) }
+        override fun onVisibilityChanged(isVisible: Boolean) { visible = isVisible; if (isVisible) requestDraw(true) }
+        override fun onSurfaceCreated(holder: SurfaceHolder) { super.onSurfaceCreated(holder); requestDraw(true) }
+        override fun onSurfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) { super.onSurfaceChanged(holder, format, width, height); requestDraw(true) }
+        override fun onSurfaceRedrawNeeded(holder: SurfaceHolder) { super.onSurfaceRedrawNeeded(holder); requestDraw(true) }
         override fun onSurfaceDestroyed(holder: SurfaceHolder) { visible = false; drawHandler.removeCallbacks(refreshRunnable); super.onSurfaceDestroyed(holder) }
 
         override fun onCreate(surfaceHolder: SurfaceHolder) {
             super.onCreate(surfaceHolder)
             try {
-                val filter = android.content.IntentFilter().apply {
-                    addAction(ACTION_REFRESH)
-                    addAction(MediaNotificationListenerService.ACTION_LIVE_TICK)
-                }
+                val filter = android.content.IntentFilter().apply { addAction(ACTION_REFRESH); addAction(MediaNotificationListenerService.ACTION_LIVE_TICK) }
                 if (Build.VERSION.SDK_INT >= 33) applicationContext.registerReceiver(receiver, filter, android.content.Context.RECEIVER_NOT_EXPORTED)
                 else @Suppress("DEPRECATION") applicationContext.registerReceiver(receiver, filter)
                 receiverRegistered = true
             } catch (t: Throwable) { android.util.Log.e("MusWallLive", "Receiver registration failed", t) }
-            requestDraw(force = true)
+            requestDraw(true)
         }
 
-        override fun onWallpaperFlagsChanged(which: Int) { super.onWallpaperFlagsChanged(which); requestDraw(force = true) }
-
-        private fun requestDraw(force: Boolean = false) {
-            drawHandler.removeCallbacks(refreshRunnable)
-            drawHandler.post(refreshRunnable)
-        }
+        override fun onWallpaperFlagsChanged(which: Int) { super.onWallpaperFlagsChanged(which); requestDraw(true) }
+        private fun requestDraw(force: Boolean = false) { drawHandler.removeCallbacks(refreshRunnable); drawHandler.post(refreshRunnable) }
 
         private fun targetFlags(): Int {
             if (Build.VERSION.SDK_INT < 34) return WallpaperManager.FLAG_SYSTEM
@@ -108,7 +93,7 @@ class MusicWallpaperService : WallpaperService() {
             return decoded
         }
 
-        private data class LyricLine(val time: Long, val text: String)
+        private class LyricLine(val time: Long, val text: String)
 
         private fun parseLrc(raw: String): List<LyricLine> {
             val result = ArrayList<LyricLine>()
@@ -117,15 +102,13 @@ class MusicWallpaperService : WallpaperService() {
                 val m = regex.matchEntire(line.trim()) ?: return@forEach
                 val minutes = m.groupValues[1].toLongOrNull() ?: return@forEach
                 val seconds = m.groupValues[2].toLongOrNull() ?: 0L
-                val fraction = m.groupValues[3].takeIf { it.isNotBlank() }?.let {
-                    when (it.length) { 1 -> it.toLong() * 100L; 2 -> it.toLong() * 10L; else -> it.take(3).toLong() }
-                } ?: 0L
+                val fraction = m.groupValues[3].takeIf { it.isNotBlank() }?.let { when (it.length) { 1 -> it.toLong() * 100L; 2 -> it.toLong() * 10L; else -> it.take(3).toLong() } } ?: 0L
                 result += LyricLine(minutes * 60000L + seconds * 1000L + fraction, m.groupValues[4].trim())
             }
             return result.sortedBy { it.time }
         }
 
-        private fun currentLyricLines(width: Int, height: Int): List<String> {
+        private fun currentLyricLines(): List<String> {
             if (!prefs.showLyrics) return emptyList()
             val raw = prefs.lastLyrics.trim()
             if (raw.isBlank()) return emptyList()
@@ -141,14 +124,19 @@ class MusicWallpaperService : WallpaperService() {
             return plain.subList(from, minOf(plain.size, from + 3)).take(3)
         }
 
+        private fun ellipsize(value: String, width: Float): String {
+            var s = value
+            while (s.length > 4 && textPaint.measureText("$s…") > width) s = s.dropLast(1)
+            return "$s…"
+        }
+
         private fun drawLyrics(canvas: Canvas) {
-            val lines = currentLyricLines(canvas.width, canvas.height)
+            val lines = currentLyricLines()
             if (lines.isEmpty()) return
             val x = canvas.width * prefs.lyricsX / 100f
             val y = canvas.height * prefs.lyricsY / 100f
             val maxWidth = canvas.width * prefs.lyricsWidth / 100f
-            val size = canvas.width * prefs.lyricsSize / 1000f
-            textPaint.textSize = size.coerceIn(18f, 96f)
+            textPaint.textSize = (canvas.width * prefs.lyricsSize / 1000f).coerceIn(18f, 96f)
             textPaint.color = runCatching { Color.parseColor(prefs.lyricsColor) }.getOrDefault(Color.WHITE)
             textPaint.textAlign = Paint.Align.CENTER
             val lineHeight = textPaint.textSize * 1.28f
@@ -156,18 +144,9 @@ class MusicWallpaperService : WallpaperService() {
             lines.take(prefs.lyricsLines).forEachIndexed { index, value ->
                 val safe = if (textPaint.measureText(value) > maxWidth) ellipsize(value, maxWidth) else value
                 val yy = start + index * lineHeight
-                if (prefs.lyricsShadow) {
-                    textPaint.setShadowLayer(8f, 2f, 2f, Color.BLACK)
-                    canvas.drawText(safe, x, yy, textPaint)
-                    textPaint.clearShadowLayer()
-                } else canvas.drawText(safe, x, yy, textPaint)
+                if (prefs.lyricsShadow) { textPaint.setShadowLayer(8f, 2f, 2f, Color.BLACK); canvas.drawText(safe, x, yy, textPaint); textPaint.clearShadowLayer() }
+                else canvas.drawText(safe, x, yy, textPaint)
             }
-        }
-
-        private fun ellipsize(value: String, width: Float): String {
-            var s = value
-            while (s.length > 4 && textPaint.measureText("$s…") > width) s = s.dropLast(1)
-            return "$s…"
         }
 
         private fun drawBass(canvas: Canvas) {
@@ -177,21 +156,19 @@ class MusicWallpaperService : WallpaperService() {
             val totalWidth = canvas.width * prefs.bassWidth / 100f
             val barHeight = (canvas.height * prefs.bassHeight / 1000f).coerceIn(4f, 32f)
             val sensitivity = prefs.bassSensitivity / 100f
-            // When a player does not expose an audio session to third-party apps,
-            // this low-cost beat envelope remains synchronized to the playback clock.
             val t = playbackPosition.toDouble() / 1000.0
             val envelope = (0.45 + 0.35 * sin(t * 8.5) + 0.20 * sin(t * 17.0 + 0.8)).coerceIn(0.08, 1.0)
             val level = (0.15 + envelope * (0.55 + sensitivity * 0.65)).coerceIn(0.08, 1.0)
-            val color = runCatching { Color.parseColor(prefs.bassColor) }.getOrDefault(Color.WHITE)
+            val bassColorValue = runCatching { Color.parseColor(prefs.bassColor) }.getOrDefault(Color.WHITE)
             val bars = 28
             val gap = maxOf(2f, totalWidth / 180f)
             val bw = (totalWidth - gap * (bars - 1)) / bars
-            textPaint.style = Paint.Style.FILL
             for (i in 0 until bars) {
-                val wave = abs(sin(i * 0.72 + t * 5.0))
+                val wave = abs(sin(i * 0.72 + t * 5.0)).toFloat()
                 val h = barHeight * (0.25f + level.toFloat() * (0.55f + wave * 0.45f))
                 val left = cx - totalWidth / 2f + i * (bw + gap)
-                canvas.drawRoundRect(RectF(left, cy - h, left + bw, cy + h), bw / 2f, bw / 2f, Paint().apply { color = color; alpha = 180 })
+                val bassPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = bassColorValue; alpha = 180 }
+                canvas.drawRoundRect(RectF(left, cy - h, left + bw, cy + h), bw / 2f, bw / 2f, bassPaint)
             }
         }
 
@@ -209,9 +186,7 @@ class MusicWallpaperService : WallpaperService() {
                 val w = bitmap.width * scale; val h = bitmap.height * scale
                 val left = (canvas.width - w) / 2f; val top = (canvas.height - h) / 2f
                 canvas.drawBitmap(bitmap, null, RectF(left, top, left + w, top + h), paint)
-                drawLyrics(canvas)
-                drawBass(canvas)
-                lastFrame = System.currentTimeMillis()
+                drawLyrics(canvas); drawBass(canvas)
             } catch (t: Throwable) { android.util.Log.w("MusWallLive", "Live wallpaper draw failed", t) }
             finally { if (canvas != null) try { holder.unlockCanvasAndPost(canvas) } catch (_: Throwable) {} }
         }
@@ -221,8 +196,7 @@ class MusicWallpaperService : WallpaperService() {
             if (receiverRegistered) try { applicationContext.unregisterReceiver(receiver) } catch (_: Throwable) {}
             receiverRegistered = false
             cachedBitmap?.let { if (!it.isRecycled) it.recycle() }; cachedBitmap = null
-            drawThread.quitSafely(); mainHandler.removeCallbacksAndMessages(null)
-            super.onDestroy()
+            drawThread.quitSafely(); mainHandler.removeCallbacksAndMessages(null); super.onDestroy()
         }
     }
 }
