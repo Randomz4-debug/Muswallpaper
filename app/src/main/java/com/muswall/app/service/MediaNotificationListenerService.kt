@@ -10,6 +10,8 @@ import android.media.session.MediaController
 import android.media.session.MediaSessionManager
 import android.media.session.PlaybackState
 import android.net.Uri
+import android.os.Handler
+import android.os.Looper
 import android.service.notification.NotificationListenerService
 import com.muswall.app.data.PreferencesManager
 import com.muswall.app.python.PythonBridge
@@ -21,19 +23,32 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.atomic.AtomicLong
 
-/** Callback-driven music detection. */
+/** Callback-driven music detection with a lightweight 4 Hz timeline for live overlays. */
 class MediaNotificationListenerService : NotificationListenerService() {
     companion object {
         const val ACTION_TRACK_CHANGED = "com.muswall.app.ACTION_TRACK_CHANGED"
         const val ACTION_PLAYBACK_STATE_CHANGED = "com.muswall.app.ACTION_PLAYBACK_STATE_CHANGED"
         const val ACTION_WALLPAPER_APPLIED = "com.muswall.app.ACTION_WALLPAPER_APPLIED"
+        const val ACTION_LIVE_TICK = "com.muswall.app.ACTION_LIVE_TICK"
         const val EXTRA_TRACK_TITLE = "extra_track_title"
         const val EXTRA_ARTIST = "extra_artist"
         const val EXTRA_IS_PLAYING = "extra_is_playing"
         const val EXTRA_STATUS_MESSAGE = "extra_status_message"
+        const val EXTRA_POSITION_MS = "extra_position_ms"
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private val timelineHandler = Handler(Looper.getMainLooper())
+    private val timelineRunnable = object : Runnable {
+        override fun run() {
+            if (playing) {
+                val position = activeController?.playbackState?.position ?: prefs.lyricsPosition
+                prefs.lyricsPosition = position
+                sendBroadcast(Intent(ACTION_LIVE_TICK).setPackage(packageName).putExtra(EXTRA_POSITION_MS, position))
+                timelineHandler.postDelayed(this, 250L)
+            }
+        }
+    }
     private val generation = AtomicLong(0L)
     private lateinit var prefs: PreferencesManager
     private lateinit var wallpaperHelper: WallpaperHelper
@@ -105,12 +120,18 @@ class MediaNotificationListenerService : NotificationListenerService() {
         val now = state?.state == PlaybackState.STATE_PLAYING
         val was = playing
         playing = now
+        if (state != null) prefs.lyricsPosition = state.position.coerceAtLeast(0L)
         broadcastPlaybackState(now)
-        if (!now) {
+        if (now) {
+            timelineHandler.removeCallbacks(timelineRunnable)
+            timelineHandler.post(timelineRunnable)
+        } else {
+            timelineHandler.removeCallbacks(timelineRunnable)
             generation.incrementAndGet()
             generationJob?.cancel()
             currentTrackId = ""
             prefs.liveMusicPlaying = false
+            sendBroadcast(Intent(ACTION_LIVE_TICK).setPackage(packageName).putExtra(EXTRA_POSITION_MS, prefs.lyricsPosition))
             if (prefs.liveWallpaperEnabled) sendBroadcast(Intent(MusicWallpaperService.ACTION_REFRESH).setPackage(packageName))
             if (was && prefs.restoreOnPause) {
                 scope.launch(Dispatchers.IO) { wallpaperHelper.restoreOriginalLock() }
@@ -134,6 +155,7 @@ class MediaNotificationListenerService : NotificationListenerService() {
         if (!force && id == currentTrackId) return
         currentTrackId = id
         prefs.lastLyrics = ""
+        prefs.lyricsPosition = 0L
         if (!prefs.isAutoEnabled || !playing || prefs.wallpaperMode != PreferencesManager.MODE_MUSIC) return
         if (!prefs.liveWallpaperEnabled) { broadcastWallpaperApplied("Music detected • enable MusWall Live Wallpaper once"); return }
         val token = generation.incrementAndGet()
@@ -154,25 +176,19 @@ class MediaNotificationListenerService : NotificationListenerService() {
         val targetW = (dm.widthPixels * 0.58f).toInt().coerceIn(480, 720)
         val targetH = (dm.heightPixels * 0.58f).toInt().coerceIn(900, 1440)
         wallpaperHelper.saveLastArtwork(artwork)
-        val result = PythonBridge.generateWallpaper(artwork, targetW, targetH, prefs.blurRadius.toFloat(), prefs.darkness / 100f, prefs.artScale / 100f, 42, true, prefs.effect, prefs.blurType, prefs.coverHeight, prefs.coverOffset, prefs.transitionHeight, prefs.showLyrics, lyrics, prefs.photoSource, "") ?: return
+        val result = PythonBridge.generateWallpaper(artwork, targetW, targetH, prefs.blurRadius.toFloat(), prefs.darkness / 100f, prefs.artScale / 100f, 42, true, prefs.effect, prefs.blurType, prefs.coverHeight, prefs.coverOffset, prefs.transitionHeight, false, "", prefs.photoSource, "") ?: return
         try {
             if (token != generation.get() || !playing || !prefs.liveWallpaperEnabled) return
             wallpaperHelper.saveCurrentForLiveWallpaper(result)
-            // POCO/MIUI does not expose a public third-party API to install a lock-only
-            // live wallpaper. Keep the Home live engine and update the Lock frame using
-            // the public FLAG_LOCK API so the lock screen follows every track safely.
             wallpaperHelper.applyLockFrame(result)
             if (token != generation.get() || !playing) return
             prefs.liveMusicPlaying = true
             sendBroadcast(Intent(MusicWallpaperService.ACTION_REFRESH).setPackage(packageName))
-            broadcastWallpaperApplied(if (prefs.showLyrics && lyrics.isNotBlank()) "Live wallpaper + lyrics updated" else "Live wallpaper updated instantly")
+            broadcastWallpaperApplied(if (prefs.showLyrics && lyrics.isNotBlank()) "Live wallpaper + live lyrics updated" else "Live wallpaper updated instantly")
         } finally { if (!result.isRecycled) result.recycle() }
     }
 
     private fun resolveLyrics(metadata: MediaMetadata, title: String, artist: String): String {
-        // Some players expose lyrics under a custom metadata key rather than a
-        // framework constant. Read the standard literal first, then any text key
-        // containing "lyrics" so Spotify-like/player-specific implementations work.
         val direct = metadata.getString("android.media.metadata.LYRICS")?.trim().orEmpty()
         if (direct.isNotBlank()) return direct
         for (key in metadata.keySet()) {
@@ -193,12 +209,13 @@ class MediaNotificationListenerService : NotificationListenerService() {
             }.build()
             val connection = (URL(uri.toString()).openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"; connectTimeout = 2500; readTimeout = 3500
-                setRequestProperty("Accept", "application/json"); setRequestProperty("User-Agent", "MusWall/1.9.7")
+                setRequestProperty("Accept", "application/json"); setRequestProperty("User-Agent", "MusWall/2.0")
             }
             try {
                 if (connection.responseCode !in 200..299) return null
                 val json = connection.inputStream.bufferedReader().use { it.readText() }
-                JSONObject(json).optString("plainLyrics").trim().takeIf { it.isNotBlank() } ?: JSONObject(json).optString("syncedLyrics").trim().takeIf { it.isNotBlank() }
+                val root = JSONObject(json)
+                root.optString("syncedLyrics").trim().takeIf { it.isNotBlank() } ?: root.optString("plainLyrics").trim().takeIf { it.isNotBlank() }
             } finally { connection.disconnect() }
         } catch (t: Throwable) { android.util.Log.d("MusWallLyrics", "Lyrics lookup failed", t); null }
     }
@@ -238,7 +255,7 @@ class MediaNotificationListenerService : NotificationListenerService() {
     override fun onNotificationRemoved(sbn: android.service.notification.StatusBarNotification?) { refreshActiveSessions() }
 
     override fun onDestroy() {
-        generation.incrementAndGet(); generationJob?.cancel()
+        generation.incrementAndGet(); generationJob?.cancel(); timelineHandler.removeCallbacksAndMessages(null)
         try { sessionManager?.removeOnActiveSessionsChangedListener(sessionsListener) } catch (_: Throwable) {}
         try { activeController?.unregisterCallback(callback) } catch (_: Throwable) {}
         activeController = null
