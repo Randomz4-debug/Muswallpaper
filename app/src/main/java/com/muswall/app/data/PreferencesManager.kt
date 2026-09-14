@@ -10,7 +10,6 @@ class PreferencesManager private constructor(context: Context) {
         fun getInstance(context: Context): PreferencesManager = INSTANCE ?: synchronized(this) {
             INSTANCE ?: PreferencesManager(context).also { INSTANCE = it }
         }
-
         const val MODE_MUSIC = "music"
         const val MODE_STATIC = "static"
         const val EFFECT_BLUR = "blur"
@@ -47,6 +46,10 @@ class PreferencesManager private constructor(context: Context) {
         const val RESOLUTION_12K = "12k"
         const val RESOLUTION_16K = "16k"
         const val RESOLUTION_CUSTOM = "custom"
+        const val COLOR_SINGLE = "single"
+        const val COLOR_GRADIENT = "gradient"
+        const val COLOR_DOUBLE = "double"
+        const val COLOR_RAINBOW = "rainbow"
     }
 
     var isAutoEnabled: Boolean get() = sp.getBoolean("auto", true); set(v) = sp.edit().putBoolean("auto", v).apply()
@@ -60,6 +63,7 @@ class PreferencesManager private constructor(context: Context) {
     var lastArtworkPath: String get() = sp.getString("last_artwork_path", "") ?: ""; set(v) = sp.edit().putString("last_artwork_path", v).apply()
     var liveWallpaperEnabled: Boolean get() = sp.getBoolean("live_enabled", false); set(v) = sp.edit().putBoolean("live_enabled", v).apply()
     var liveMusicPlaying: Boolean get() = sp.getBoolean("live_playing", false); set(v) = sp.edit().putBoolean("live_playing", v).apply()
+    var lastPlaybackState: String get() = sp.getString("last_playback_state", "paused") ?: "paused"; set(v) = sp.edit().putString("last_playback_state", v).apply()
     var lastTrackTitle: String get() = sp.getString("last_title", "") ?: ""; set(v) = sp.edit().putString("last_title", v).apply()
     var lastArtist: String get() = sp.getString("last_artist", "") ?: ""; set(v) = sp.edit().putString("last_artist", v).apply()
     var lastLyrics: String get() = sp.getString("last_lyrics", "") ?: ""; set(v) = sp.edit().putString("last_lyrics", v).apply()
@@ -83,6 +87,10 @@ class PreferencesManager private constructor(context: Context) {
     var lyricsSize: Int get() = sp.getInt("lyrics_size", 22); set(v) = sp.edit().putInt("lyrics_size", v.coerceIn(10, 72)).apply()
     var lyricsLines: Int get() = sp.getInt("lyrics_lines", 3); set(v) = sp.edit().putInt("lyrics_lines", v.coerceIn(1, 6)).apply()
     var lyricsColor: String get() = sp.getString("lyrics_color", "#FFFFFF") ?: "#FFFFFF"; set(v) = sp.edit().putString("lyrics_color", v).apply()
+    var lyricsColor2: String get() = sp.getString("lyrics_color2", "#A78BFA") ?: "#A78BFA"; set(v) = sp.edit().putString("lyrics_color2", v).apply()
+    var lyricsColor3: String get() = sp.getString("lyrics_color3", "#22D3EE") ?: "#22D3EE"; set(v) = sp.edit().putString("lyrics_color3", v).apply()
+    var lyricsColorMode: String get() = sp.getString("lyrics_color_mode", COLOR_SINGLE) ?: COLOR_SINGLE; set(v) = sp.edit().putString("lyrics_color_mode", v).apply()
+    var lyricsLanguage: String get() = sp.getString("lyrics_language", "original") ?: "original"; set(v) = sp.edit().putString("lyrics_language", v).apply()
     var lyricsShadow: Boolean get() = sp.getBoolean("lyrics_shadow", true); set(v) = sp.edit().putBoolean("lyrics_shadow", v).apply()
     var bassEnabled: Boolean get() = sp.getBoolean("bass_enabled", true); set(v) = sp.edit().putBoolean("bass_enabled", v).apply()
     var bassX: Int get() = sp.getInt("bass_x", 50); set(v) = sp.edit().putInt("bass_x", v.coerceIn(0, 100)).apply()
@@ -91,6 +99,9 @@ class PreferencesManager private constructor(context: Context) {
     var bassHeight: Int get() = sp.getInt("bass_height", 8); set(v) = sp.edit().putInt("bass_height", v.coerceIn(2, 30)).apply()
     var bassSensitivity: Int get() = sp.getInt("bass_sensitivity", 70); set(v) = sp.edit().putInt("bass_sensitivity", v.coerceIn(0, 100)).apply()
     var bassColor: String get() = sp.getString("bass_color", "#FFFFFF") ?: "#FFFFFF"; set(v) = sp.edit().putString("bass_color", v).apply()
+    var bassColor2: String get() = sp.getString("bass_color2", "#A78BFA") ?: "#A78BFA"; set(v) = sp.edit().putString("bass_color2", v).apply()
+    var bassColor3: String get() = sp.getString("bass_color3", "#22D3EE") ?: "#22D3EE"; set(v) = sp.edit().putString("bass_color3", v).apply()
+    var bassColorMode: String get() = sp.getString("bass_color_mode", COLOR_SINGLE) ?: COLOR_SINGLE; set(v) = sp.edit().putString("bass_color_mode", v).apply()
     var photoSource: String get() = sp.getString("photo_source", PHOTO_AUTO) ?: PHOTO_AUTO; set(v) = sp.edit().putString("photo_source", v).apply()
     var customPhotoUri: String get() = sp.getString("custom_photo_uri", "") ?: ""; set(v) = sp.edit().putString("custom_photo_uri", v).apply()
     var photoFallback: Boolean get() = sp.getBoolean("photo_fallback", true); set(v) = sp.edit().putBoolean("photo_fallback", v).apply()
@@ -99,7 +110,6 @@ class PreferencesManager private constructor(context: Context) {
     var customRenderWidth: Int get() = sp.getInt("render_width", 1080).coerceIn(160, 16384); set(v) = sp.edit().putInt("render_width", v.coerceIn(160, 16384)).apply()
     var customRenderHeight: Int get() = sp.getInt("render_height", 2400).coerceIn(240, 16384); set(v) = sp.edit().putInt("render_height", v.coerceIn(240, 16384)).apply()
 
-    // Widget customization. These are deliberately global so every widget stays consistent after a change.
     var widgetStyle: Int get() = sp.getInt("widget_style", 0); set(v) = sp.edit().putInt("widget_style", v.coerceIn(0, 2)).apply()
     var widgetOpacity: Int get() = sp.getInt("widget_opacity", 92); set(v) = sp.edit().putInt("widget_opacity", v.coerceIn(0, 100)).apply()
     var widgetShowArtwork: Boolean get() = sp.getBoolean("widget_show_artwork", true); set(v) = sp.edit().putBoolean("widget_show_artwork", v).apply()
@@ -112,10 +122,14 @@ class PreferencesManager private constructor(context: Context) {
     var widgetEmptyTitle: String get() = sp.getString("widget_empty_title", "No music playing") ?: "No music playing"; set(v) = sp.edit().putString("widget_empty_title", v).apply()
     var widgetTextColor: String get() = sp.getString("widget_text_color", "#FFFFFF") ?: "#FFFFFF"; set(v) = sp.edit().putString("widget_text_color", v).apply()
     var widgetSecondaryColor: String get() = sp.getString("widget_secondary_color", "#C7C7D0") ?: "#C7C7D0"; set(v) = sp.edit().putString("widget_secondary_color", v).apply()
-    var widgetBackgroundColor: String get() = sp.getString("widget_background_color", "#17151F") ?: "#17151F"; set(v) = sp.edit().putString("widget_background_color", v).apply()
+    var widgetBackgroundColor: String get() = sp.getString("widget_background_color", "#17151F") ?: "#17151F"; set(v) = sp.edit().putString("widget_background_color", v).apply(v)
     var widgetTitleSize: Int get() = sp.getInt("widget_title_size", 15); set(v) = sp.edit().putInt("widget_title_size", v.coerceIn(10, 28)).apply()
     var widgetArtistSize: Int get() = sp.getInt("widget_artist_size", 12); set(v) = sp.edit().putInt("widget_artist_size", v.coerceIn(8, 22)).apply()
     var widgetCustomTextSize: Int get() = sp.getInt("widget_custom_text_size", 11); set(v) = sp.edit().putInt("widget_custom_text_size", v.coerceIn(8, 22)).apply()
     var widgetShowTime: Boolean get() = sp.getBoolean("widget_show_time", false); set(v) = sp.edit().putBoolean("widget_show_time", v).apply()
     var widgetCustomTimeLabel: String get() = sp.getString("widget_time_label", "Now Playing") ?: "Now Playing"; set(v) = sp.edit().putString("widget_time_label", v).apply()
+    var widgetCornerRadius: Int get() = sp.getInt("widget_corner_radius", 22); set(v) = sp.edit().putInt("widget_corner_radius", v.coerceIn(0, 50)).apply()
+    var widgetPadding: Int get() = sp.getInt("widget_padding", 10); set(v) = sp.edit().putInt("widget_padding", v.coerceIn(0, 30)).apply()
+    var widgetArtworkSize: Int get() = sp.getInt("widget_artwork_size", 68); set(v) = sp.edit().putInt("widget_artwork_size", v.coerceIn(32, 140)).apply()
+    var widgetLayout: Int get() = sp.getInt("widget_layout", 0); set(v) = sp.edit().putInt("widget_layout", v.coerceIn(0, 1)).apply()
 }
