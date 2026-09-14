@@ -4,14 +4,16 @@ import re
 p = Path('app/src/main/java/com/muswall/app/ui/SettingsActivity.kt')
 s = p.read_text(encoding='utf-8')
 s = re.sub(r'private val customPhotoPicker=.*?\n', '''private val customPhotoPicker=registerForActivityResult(ActivityResultContracts.OpenDocument()){uri->if(uri!=null){try{contentResolver.takePersistableUriPermission(uri,Intent.FLAG_GRANT_READ_URI_PERMISSION)}catch(_:Throwable){};prefs.customPhotoUri=uri.toString();prefs.photoSource=PreferencesManager.PHOTO_CUSTOM;updatePhotoLabels()}}\n''', s, count=1)
-s = re.sub(r'private val originalWallpaperPicker=.*?\n', '''private val originalWallpaperPicker=registerForActivityResult(ActivityResultContracts.OpenDocument()){uri->if(uri!=null){try{contentResolver.takePersistableUriPermission(uri,Intent.FLAG_GRANT_READ_URI_PERMISSION)}catch(_:Throwable){};ioScope.launch{val ok=wallpaperHelper.setOriginalFromUri(uri,originalTarget);ToastCompat.show(this@SettingsActivity,if(ok)"Original wallpaper saved"else"Could not save wallpaper")}}}\n''', s, count=1)
+s = re.sub(r'private val originalWallpaperPicker=.*?\n', '''private val originalWallpaperPicker=registerForActivityResult(ActivityResultContracts.OpenDocument()){uri->if(uri!=null){try{contentResolver.takePersistableUriPermission(uri,Intent.FLAG_GRANT_READ_URI_PERMISSION)}catch(_:Throwable){};ioScope.launch{val ok=wallpaperHelper.setOriginalFromUri(uri,originalTarget);ToastCompat.show(this@SettingsActivity,if(ok)"Original wallpaper saved" else "Could not save wallpaper")}}}\n''', s, count=1)
 s = s.replace('if(uri==null){return};', 'if(uri!=null){')
+s = s.replace('"else"', '" else "')
 s = s.replace('AlertDialog.Builder(this).setTitle("Lyrics — live position, style & language").setView(root).setPositiveButton("Done",null)', 'AlertDialog.Builder(this).setTitle("Lyrics — live position, style & language").setView(root).setPositiveButton("Done"){_,_->prefs.lyricsX=x.value();prefs.lyricsY=y.value();prefs.lyricsWidth=w.value();prefs.lyricsSize=s.value();prefs.lyricsLines=l.value();updateLyricsLabel();refreshLive()}')
 s = s.replace('AlertDialog.Builder(this).setTitle("Bass — live position & color").setView(root).setPositiveButton("Done",null)', 'AlertDialog.Builder(this).setTitle("Bass — live position & color").setView(root).setPositiveButton("Done"){_,_->prefs.bassX=x.value();prefs.bassY=y.value();prefs.bassWidth=w.value();prefs.bassHeight=h.value();prefs.bassSensitivity=se.value();updateBassLabel();refreshLive()}')
 p.write_text(s, encoding='utf-8')
 
 p = Path('app/src/main/java/com/muswall/app/service/MediaNotificationListenerService.kt')
 s = p.read_text(encoding='utf-8')
+s = s.replace('"else"', '" else "')
 start = s.index('    private fun handleMetadata(')
 end = s.index('    private fun refreshLive()', start)
 new_handle = '''    private fun handleMetadata(metadata:MediaMetadata?,force:Boolean=false){
