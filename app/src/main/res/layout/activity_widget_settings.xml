@@ -20,9 +20,9 @@
 <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Artist size" android:textColor="#FFFFFF" android:textSize="15sp"/><SeekBar android:id="@+id/widgetArtistSize" android:layout_width="match_parent" android:layout_height="wrap_content"/>
 <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Custom text size" android:textColor="#FFFFFF" android:textSize="15sp"/><SeekBar android:id="@+id/widgetCustomSize" android:layout_width="match_parent" android:layout_height="wrap_content"/>
 <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="TEXT &amp; COLORS" android:textColor="#A78BFA" android:textSize="13sp" android:textStyle="bold" android:layout_marginTop="24dp"/>
-<EditText android:id="@+id/widgetCustomText" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="Custom text" android:textColor="#FFFFFF" android:hintTextColor="#77717F"/>
-<EditText android:id="@+id/widgetEmptyText" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="Text when no music is playing" android:textColor="#FFFFFF" android:hintTextColor="#77717F"/>
-<EditText android:id="@+id/widgetTimeLabel" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="Time/status label" android:textColor="#FFFFFF" android:hintTextColor="#77717F"/>
+<EditText android:id="@+id/widgetCustomText" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="Custom text" android:textColor="#FFFFFF"/>
+<EditText android:id="@+id/widgetEmptyText" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="Text when no music is playing" android:textColor="#FFFFFF"/>
+<EditText android:id="@+id/widgetTimeLabel" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="Time/status label" android:textColor="#FFFFFF"/>
 <EditText android:id="@+id/widgetTextColor" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="#FFFFFF — title/custom text" android:textColor="#FFFFFF"/>
 <EditText android:id="@+id/widgetSecondaryColor" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="#C7C7D0 — artist/secondary" android:textColor="#FFFFFF"/>
 <EditText android:id="@+id/widgetBackgroundColor" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="#17151F — background" android:textColor="#FFFFFF"/>
