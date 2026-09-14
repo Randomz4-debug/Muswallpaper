@@ -97,17 +97,13 @@ class WallpaperHelper(private val context: Context) {
         ApplyResult(success, target, message)
     }
 
-    /** Updates only the static Lock wallpaper. This is the POCO/MIUI compatibility path. */
     suspend fun applyLockFrame(bitmap: Bitmap): Boolean = withContext(Dispatchers.IO) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return@withContext false
         try {
             backupOriginalIfNeeded()
             wallpaperManager.setBitmap(bitmap, null, true, WallpaperManager.FLAG_LOCK)
             true
-        } catch (t: Throwable) {
-            Log.w(TAG, "Lock frame update failed", t)
-            false
-        }
+        } catch (t: Throwable) { Log.w(TAG, "Lock frame update failed", t); false }
     }
 
     suspend fun restoreOriginalLock(): Boolean = withContext(Dispatchers.IO) {
@@ -122,14 +118,27 @@ class WallpaperHelper(private val context: Context) {
     }
 
     fun openLiveWallpaperPicker() {
+        val component = ComponentName(context, MusicWallpaperService::class.java)
         try {
-            val component = ComponentName(context, MusicWallpaperService::class.java)
-            context.startActivity(Intent(WallpaperManager.ACTION_CHANGE_LIVE_WALLPAPER).apply {
-                putExtra(WallpaperManager.EXTRA_LIVE_WALLPAPER_COMPONENT, component)
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            })
-        } catch (_: Exception) {
-            context.startActivity(Intent(WallpaperManager.ACTION_LIVE_WALLPAPER_CHOOSER).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            if (isXiaomiOrPoco()) {
+                // POCO/MIUI is more reliable when the user enters the system live-wallpaper list and chooses
+                // MusWall there, because that flow exposes the Lock/Home/Both destination controls.
+                context.startActivity(Intent(WallpaperManager.ACTION_LIVE_WALLPAPER_CHOOSER).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            } else {
+                context.startActivity(Intent(WallpaperManager.ACTION_CHANGE_LIVE_WALLPAPER).apply {
+                    putExtra(WallpaperManager.EXTRA_LIVE_WALLPAPER_COMPONENT, component)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                })
+            }
+        } catch (_: Throwable) {
+            try {
+                context.startActivity(Intent(WallpaperManager.ACTION_CHANGE_LIVE_WALLPAPER).apply {
+                    putExtra(WallpaperManager.EXTRA_LIVE_WALLPAPER_COMPONENT, component)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                })
+            } catch (_: Throwable) {
+                context.startActivity(Intent(WallpaperManager.ACTION_LIVE_WALLPAPER_CHOOSER).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            }
         }
     }
 
