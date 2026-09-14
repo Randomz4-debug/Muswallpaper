@@ -1,58 +1,302 @@
 package com.muswall.app.service
 
+import android.app.Notification
 import android.content.ComponentName
-import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
-import android.media.MediaMetadata
-import android.media.session.MediaController
-import android.media.session.MediaSessionManager
-import android.media.session.PlaybackState
 import android.net.Uri
 import android.os.Build
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
+import android.support.v4.media.MediaBrowserCompat
+import android.support.v4.media.session.MediaControllerCompat
+import android.support.v4.media.session.MediaSessionCompat
+import android.support.v4.media.session.PlaybackStateCompat
+import android.support.v4.media.session.MediaSessionManager
+import android.media.MediaMetadata
+import androidx.annotation.RequiresApi
 import com.muswall.app.data.PreferencesManager
 import com.muswall.app.python.PythonBridge
 import com.muswall.app.wallpaper.MusicWallpaperService
-import com.muswall.app.wallpaper.WallpaperHelper
 import kotlinx.coroutines.*
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
+import kotlin.math.min
 
 class MediaNotificationListenerService : NotificationListenerService() {
-    companion object { const val ACTION_TRACK_CHANGED="com.muswall.app.ACTION_TRACK_CHANGED";const val ACTION_PLAYBACK_STATE_CHANGED="com.muswall.app.ACTION_PLAYBACK_STATE_CHANGED";const val ACTION_WALLPAPER_APPLIED="com.muswall.app.ACTION_WALLPAPER_APPLIED";const val EXTRA_TRACK_TITLE="extra_track_title";const val EXTRA_ARTIST="extra_artist";const val EXTRA_IS_PLAYING="extra_is_playing";const val EXTRA_STATUS_MESSAGE="extra_status_message";private const val TAG="MusWallMedia" }
-    private val scope=CoroutineScope(SupervisorJob()+Dispatchers.Main.immediate);private val generation=AtomicLong(0);private lateinit var prefs:PreferencesManager;private lateinit var wallpaperHelper:WallpaperHelper;private var sessionManager:MediaSessionManager?=null;private var activeController:MediaController?=null;private var currentTrackId="";private var playing=false;private var generationJob:Job?=null;private val notificationArtwork=ConcurrentHashMap<String,Bitmap>()
-    private val callback=object:MediaController.Callback(){override fun onPlaybackStateChanged(s:PlaybackState?)=handlePlayback(s);override fun onMetadataChanged(m:MediaMetadata?)=handleMetadata(m,true);override fun onSessionDestroyed(){handlePlayback(null);refreshActiveSessions()}};private val sessionsListener=MediaSessionManager.OnActiveSessionsChangedListener{selectBestController(it)}
-    override fun onCreate(){super.onCreate();prefs=PreferencesManager.getInstance(this);wallpaperHelper=WallpaperHelper(this);PythonBridge.initialize(this)}
-    override fun onListenerConnected(){super.onListenerConnected();try{activeNotifications?.forEach{cacheNotificationArtwork(it)}}catch(t:Throwable){android.util.Log.w(TAG,"notification scan failed",t)};connectSessions()}
-    private fun connectSessions(){try{sessionManager=getSystemService(Context.MEDIA_SESSION_SERVICE) as MediaSessionManager;val c=ComponentName(this,MediaNotificationListenerService::class.java);sessionManager?.addOnActiveSessionsChangedListener(sessionsListener,c);refreshActiveSessions()}catch(t:Throwable){android.util.Log.w(TAG,"session connection failed",t);broadcastWallpaperApplied("Music detection is not connected. Enable Notification access.")}}
-    private fun refreshActiveSessions(){try{selectBestController(sessionManager?.getActiveSessions(ComponentName(this,MediaNotificationListenerService::class.java)))}catch(t:Throwable){android.util.Log.w(TAG,"session refresh failed",t)}}
-    private fun selectBestController(list:List<MediaController>?){val l=list.orEmpty();switchController(l.firstOrNull{it.playbackState?.state==PlaybackState.STATE_PLAYING}?:l.firstOrNull{it.metadata!=null}?:l.firstOrNull())}
-    private fun switchController(c:MediaController?){if(c?.sessionToken==activeController?.sessionToken){c?.playbackState?.let{handlePlayback(it)};c?.metadata?.let{handleMetadata(it,false)};return};runCatching{activeController?.unregisterCallback(callback)};activeController=c;currentTrackId="";if(c==null){handlePlayback(null);broadcastTrack("No music detected","Waiting for a music player");return};runCatching{c.registerCallback(callback)};handlePlayback(c.playbackState);c.metadata?.let{handleMetadata(it,true)}}
-    private fun handlePlayback(s:PlaybackState?){val now=s?.state==PlaybackState.STATE_PLAYING;val was=playing;playing=now;broadcastPlaybackState(now);if(!now){generation.incrementAndGet();generationJob?.cancel();currentTrackId="";prefs.liveMusicPlaying=false;if(prefs.liveWallpaperEnabled)refreshLive();if(was&&prefs.restoreOnPause)broadcastWallpaperApplied("Music stopped • original wallpaper restored")}else if(!was)activeController?.metadata?.let{handleMetadata(it,true)}}
-    private fun handleMetadata(m:MediaMetadata?,force:Boolean){if(m==null)return;val title=m.getString(MediaMetadata.METADATA_KEY_TITLE)?.trim().orEmpty().ifEmpty{"Unknown title"};val artist=m.getString(MediaMetadata.METADATA_KEY_ARTIST)?.trim().orEmpty().ifEmpty{"Unknown artist"};broadcastTrack(title,artist);prefs.lastTrackTitle=title;prefs.lastArtist=artist;val artUri=firstNonBlank(m.getString(MediaMetadata.METADATA_KEY_ALBUM_ART_URI),m.getString(MediaMetadata.METADATA_KEY_ART_URI),if(Build.VERSION.SDK_INT>=21)m.getString(MediaMetadata.METADATA_KEY_DISPLAY_ICON_URI)else null);val id="${activeController?.packageName.orEmpty()}\u0000${m.getString(MediaMetadata.METADATA_KEY_MEDIA_ID).orEmpty()}\u0000$title\u0000$artist\u0000$artUri";if(!force&&id==currentTrackId)return;currentTrackId=id;if(!prefs.isAutoEnabled||!playing||prefs.wallpaperMode!=PreferencesManager.MODE_MUSIC)return;if(!prefs.liveWallpaperEnabled){broadcastWallpaperApplied("Music detected • enable MusWall Live Wallpaper once");return};val token=generation.incrementAndGet();generationJob?.cancel();generationJob=scope.launch(Dispatchers.Default){val art=extractArtwork(m,activeController?.packageName.orEmpty());if(art==null){broadcastWallpaperApplied("Track detected, but no album artwork was available");return@launch};try{renderAndSendToLiveWallpaper(art,token)}finally{if(!art.isRecycled)art.recycle()}}}
-    private suspend fun renderAndSendToLiveWallpaper(art:Bitmap,token:Long){if(token!=generation.get()||!playing||!prefs.liveWallpaperEnabled)return;val dm=resources.displayMetrics;val result=PythonBridge.generateWallpaper(art,(dm.widthPixels*.58f).toInt().coerceIn(480,720),(dm.heightPixels*.58f).toInt().coerceIn(900,1440),prefs.blurRadius.toFloat(),prefs.darkness/100f,prefs.artScale/100f,42,true,prefs.effect,prefs.blurType,prefs.coverHeight,prefs.coverOffset,prefs.transitionHeight,prefs.showLyrics,buildLyrics(),prefs.photoSource,prefs.customPhotoUri)?:return;try{if(token!=generation.get()||!playing||!prefs.liveWallpaperEnabled)return;wallpaperHelper.saveLastArtwork(art);wallpaperHelper.saveCurrentForLiveWallpaper(result);prefs.liveMusicPlaying=true;refreshLive();broadcastWallpaperApplied("Live wallpaper updated instantly")}finally{if(!result.isRecycled)result.recycle()}}
-    private fun buildLyrics():String=activeController?.metadata?.getString("android.media.metadata.LYRICS").orEmpty()
-    private suspend fun extractArtwork(m:MediaMetadata,pkg:String):Bitmap?=try{
-        when(prefs.photoSource){
-            PreferencesManager.PHOTO_CUSTOM->{if(prefs.customPhotoUri.isNotBlank())loadArtworkUri(prefs.customPhotoUri)?.let{return it}}
-            PreferencesManager.PHOTO_ALBUM->{m.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART)?.let{downsampleArtwork(it)?.let{return it}};m.getString(MediaMetadata.METADATA_KEY_ALBUM_ART_URI)?.let{loadArtworkUri(it)?.let{return it}}}
-            PreferencesManager.PHOTO_ART->{m.getBitmap(MediaMetadata.METADATA_KEY_ART)?.let{downsampleArtwork(it)?.let{return it}};m.getString(MediaMetadata.METADATA_KEY_ART_URI)?.let{loadArtworkUri(it)?.let{return it}}}
-            PreferencesManager.PHOTO_DISPLAY_ICON->{m.getBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON)?.let{downsampleArtwork(it)?.let{return it}};m.getString(MediaMetadata.METADATA_KEY_DISPLAY_ICON_URI)?.let{loadArtworkUri(it)?.let{return it}}}
-            PreferencesManager.PHOTO_NOTIFICATION->{notificationArtwork[pkg]?.let{downsampleArtwork(it)?.let{return it}}}
-            else->{m.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART)?.let{downsampleArtwork(it)?.let{return it}};m.getBitmap(MediaMetadata.METADATA_KEY_ART)?.let{downsampleArtwork(it)?.let{return it}};m.getBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON)?.let{downsampleArtwork(it)?.let{return it}}}
+    companion object {
+        const val ACTION_TRACK_CHANGED = "com.muswall.app.TRACK_CHANGED"
+        const val ACTION_PLAYBACK_STATE_CHANGED = "com.muswall.app.PLAYBACK_STATE_CHANGED"
+        const val ACTION_WALLPAPER_APPLIED = "com.muswall.app.WALLPAPER_APPLIED"
+        const val EXTRA_TRACK_TITLE = "track_title"
+        const val EXTRA_ARTIST = "artist"
+        const val EXTRA_IS_PLAYING = "is_playing"
+        const val EXTRA_STATUS_MESSAGE = "status_message"
+        private const val TAG = "MusWallMedia"
+    }
+
+    private lateinit var prefs: PreferencesManager
+    private lateinit var sessionManager: MediaSessionManager
+    private var activeController: MediaControllerCompat? = null
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private var generationJob: Job? = null
+    private val generation = AtomicLong(0)
+    private val notificationArtwork = ConcurrentHashMap<String, Bitmap>()
+
+    private val callback = object : MediaControllerCompat.Callback() {
+        override fun onPlaybackStateChanged(state: PlaybackStateCompat?) {
+            handlePlayback(state)
         }
-        val uris=listOfNotNull(m.getString(MediaMetadata.METADATA_KEY_ALBUM_ART_URI),m.getString(MediaMetadata.METADATA_KEY_ART_URI),if(Build.VERSION.SDK_INT>=21)m.getString(MediaMetadata.METADATA_KEY_DISPLAY_ICON_URI)else null).filter{it.isNotBlank()}.distinct();for(u in uris)loadArtworkUri(u)?.let{return it};if(prefs.photoFallback)notificationArtwork[pkg]?.let{downsampleArtwork(it)?.let{return it}}
-        null
-    }catch(t:Throwable){android.util.Log.w(TAG,"art extraction failed",t);null}
-    private suspend fun loadArtworkUri(text:String):Bitmap?=withContext(Dispatchers.IO){try{val uri=Uri.parse(text);val d=when(uri.scheme?.lowercase()){"http","https"->{var c:HttpURLConnection?=null;try{c=URL(text).openConnection() as HttpURLConnection;c.connectTimeout=2500;c.readTimeout=4000;c.setRequestProperty("User-Agent","MusWall/1.9");c.connect();if(c.responseCode !in 200..299)return@withContext null;c.inputStream.use{BitmapFactory.decodeStream(it)}}finally{c?.disconnect()}}else->contentResolver.openInputStream(uri)?.use{BitmapFactory.decodeStream(it)}};d?.let{downsampleArtwork(it)}}catch(_:Throwable){null}}
-    private fun cacheNotificationArtwork(sbn:StatusBarNotification){try{val icon=if(Build.VERSION.SDK_INT>=23)sbn.notification.getLargeIcon()else null;if(icon==null)return;val d=icon.loadDrawable(this)?:return;val w=d.intrinsicWidth.coerceAtLeast(1).coerceAtMost(900);val h=d.intrinsicHeight.coerceAtLeast(1).coerceAtMost(900);val b=Bitmap.createBitmap(w,h,Bitmap.Config.ARGB_8888);Canvas(b).also{c->d.setBounds(0,0,w,h);d.draw(c)};notificationArtwork.put(sbn.packageName,b)?.let{if(!it.isRecycled)it.recycle()}}catch(t:Throwable){android.util.Log.w(TAG,"notification art failed",t)}}
-    private fun downsampleArtwork(b:Bitmap):Bitmap?=try{val s=b.copy(Bitmap.Config.ARGB_8888,false)?:return null;if(s.width<=900&&s.height<=900)return s;val scale=minOf(900f/s.width,900f/s.height);Bitmap.createScaledBitmap(s,(s.width*scale).toInt().coerceAtLeast(1),(s.height*scale).toInt().coerceAtLeast(1),true).also{if(it!==s&&!s.isRecycled)s.recycle()}}catch(_:Throwable){null}
-    private fun firstNonBlank(vararg v:String?):String?=v.firstOrNull{!it.isNullOrBlank()};private fun refreshLive()=sendBroadcast(Intent(MusicWallpaperService.ACTION_REFRESH).setPackage(packageName));private fun broadcastTrack(t:String,a:String)=sendBroadcast(Intent(ACTION_TRACK_CHANGED).setPackage(packageName).putExtra(EXTRA_TRACK_TITLE,t).putExtra(EXTRA_ARTIST,a));private fun broadcastPlaybackState(p:Boolean)=sendBroadcast(Intent(ACTION_PLAYBACK_STATE_CHANGED).setPackage(packageName).putExtra(EXTRA_IS_PLAYING,p));private fun broadcastWallpaperApplied(s:String)=sendBroadcast(Intent(ACTION_WALLPAPER_APPLIED).setPackage(packageName).putExtra(EXTRA_STATUS_MESSAGE,s))
-    override fun onNotificationPosted(sbn:StatusBarNotification?){sbn?.let{cacheNotificationArtwork(it)};refreshActiveSessions()};override fun onNotificationRemoved(sbn:StatusBarNotification?){refreshActiveSessions()};override fun onDestroy(){generation.incrementAndGet();generationJob?.cancel();runCatching{sessionManager?.removeOnActiveSessionsChangedListener(sessionsListener)};runCatching{activeController?.unregisterCallback(callback)};notificationArtwork.values.forEach{if(!it.isRecycled)it.recycle()};notificationArtwork.clear();scope.cancel();super.onDestroy()}
+        override fun onMetadataChanged(metadata: MediaMetadata?) {
+            handleMetadata(activeController, metadata, force = true)
+        }
+    }
+
+    private val sessionsListener = MediaSessionManager.OnActiveSessionsChangedListener { controllers ->
+        chooseController(controllers)
+    }
+
+    override fun onCreate() {
+        super.onCreate()
+        prefs = PreferencesManager.getInstance(this)
+        sessionManager = getSystemService(MediaSessionManager::class.java)
+    }
+
+    override fun onListenerConnected() {
+        super.onListenerConnected()
+        runCatching {
+            sessionManager.addOnActiveSessionsChangedListener(sessionsListener, ComponentName(this, javaClass))
+        }
+        refreshActiveSessions()
+    }
+
+    private fun refreshActiveSessions() {
+        runCatching {
+            chooseController(sessionManager.getActiveSessions(ComponentName(this, javaClass)))
+        }.onFailure { android.util.Log.w(TAG, "Could not query active sessions", it) }
+    }
+
+    private fun chooseController(controllers: List<MediaControllerCompat>?) {
+        val list = controllers.orEmpty()
+        val selected = list.firstOrNull { isPlaying(it) }
+            ?: list.firstOrNull { it.metadata != null }
+            ?: list.firstOrNull()
+
+        if (selected?.sessionToken != activeController?.sessionToken) {
+            runCatching { activeController?.unregisterCallback(callback) }
+            activeController = selected
+            runCatching { selected?.registerCallback(callback) }
+        }
+
+        selected?.let {
+            handlePlayback(it.playbackState)
+            handleMetadata(it, it.metadata, force = true)
+        }
+    }
+
+    private fun isPlaying(controller: MediaControllerCompat): Boolean =
+        controller.playbackState?.state == PlaybackStateCompat.STATE_PLAYING
+
+    private fun handlePlayback(state: PlaybackStateCompat?) {
+        val playing = state?.state == PlaybackStateCompat.STATE_PLAYING
+        if (!playing) {
+            generation.incrementAndGet()
+            generationJob?.cancel()
+            prefs.liveMusicPlaying = false
+            broadcastPlaybackState(false)
+            refreshLive()
+            return
+        }
+
+        prefs.liveMusicPlaying = true
+        broadcastPlaybackState(true)
+        activeController?.let { handleMetadata(it, it.metadata, force = true) }
+    }
+
+    private fun handleMetadata(controller: MediaControllerCompat?, metadata: MediaMetadata?, force: Boolean) {
+        if (metadata == null) return
+        val title = metadata.getString(MediaMetadata.METADATA_KEY_TITLE).orEmpty()
+        val artist = metadata.getString(MediaMetadata.METADATA_KEY_ARTIST)
+            ?: metadata.getString(MediaMetadata.METADATA_KEY_ALBUM_ARTIST).orEmpty()
+        val packageName = controller?.packageName.orEmpty()
+        val id = listOf(packageName, metadata.getString(MediaMetadata.METADATA_KEY_MEDIA_ID).orEmpty(), title, artist,
+            metadata.getString(MediaMetadata.METADATA_KEY_ALBUM_ART_URI).orEmpty(),
+            metadata.getString(MediaMetadata.METADATA_KEY_ART_URI).orEmpty()).joinToString("|")
+        if (!force && id == prefs.lastTrackTitle + "|" + prefs.lastArtist) return
+        prefs.lastTrackTitle = title
+        prefs.lastArtist = artist
+        broadcastTrack(title, artist)
+
+        if (prefs.wallpaperMode != PreferencesManager.MODE_MUSIC || !prefs.liveWallpaperEnabled) {
+            return
+        }
+
+        val token = generation.incrementAndGet()
+        generationJob?.cancel()
+        generationJob = scope.launch {
+            val artwork = withContext(Dispatchers.IO) { extractArtwork(metadata, packageName) }
+            if (token != generation.get()) return@launch
+            if (artwork == null) {
+                broadcastWallpaperApplied("No music artwork found")
+                return@launch
+            }
+            val display = resources.displayMetrics
+            val maxW = min(720, display.widthPixels.coerceAtLeast(480))
+            val maxH = min(1440, display.heightPixels.coerceAtLeast(900))
+            val bridge = PythonBridge.getInstance(this@MediaNotificationListenerService)
+            val lyrics = buildLyrics(metadata)
+            val output = withContext(Dispatchers.Default) {
+                bridge.generateWallpaper(artwork, maxW, maxH, prefs.blurRadius, prefs.darkness,
+                    prefs.artScale, 28, true, prefs.effect, prefs.blurType, prefs.coverHeight,
+                    prefs.coverOffset, prefs.transitionHeight, prefs.showLyrics, lyrics,
+                    prefs.photoSource, prefs.customPhotoUri)
+            }
+            if (token != generation.get() || output == null) return@launch
+            WallpaperHelperCompat.saveCurrent(this@MediaNotificationListenerService, output)
+            refreshLive()
+            broadcastWallpaperApplied("Music wallpaper updated")
+        }
+    }
+
+    private fun buildLyrics(metadata: MediaMetadata): String? {
+        return metadata.getString(MediaMetadata.METADATA_KEY_LYRICS)?.takeIf { it.isNotBlank() }
+    }
+
+    private fun extractArtwork(metadata: MediaMetadata, pkg: String): Bitmap? {
+        return try {
+            when (prefs.photoSource) {
+                PreferencesManager.PHOTO_CUSTOM -> loadArtworkUri(prefs.customPhotoUri)
+                PreferencesManager.PHOTO_ALBUM -> metadata.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART)?.let { downsampleArtwork(it) }
+                    ?: metadata.getString(MediaMetadata.METADATA_KEY_ALBUM_ART_URI)?.let { loadArtworkUri(it) }
+                PreferencesManager.PHOTO_ART -> metadata.getBitmap(MediaMetadata.METADATA_KEY_ART)?.let { downsampleArtwork(it) }
+                    ?: metadata.getString(MediaMetadata.METADATA_KEY_ART_URI)?.let { loadArtworkUri(it) }
+                PreferencesManager.PHOTO_DISPLAY_ICON -> if (Build.VERSION.SDK_INT >= 21) {
+                    metadata.getBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON)?.let { downsampleArtwork(it) }
+                        ?: metadata.getString(MediaMetadata.METADATA_KEY_DISPLAY_ICON_URI)?.let { loadArtworkUri(it) }
+                } else null
+                PreferencesManager.PHOTO_NOTIFICATION -> notificationArtwork[pkg]?.let { downsampleArtwork(it) }
+                else -> {
+                    metadata.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART)?.let { downsampleArtwork(it) }
+                        ?: metadata.getBitmap(MediaMetadata.METADATA_KEY_ART)?.let { downsampleArtwork(it) }
+                        ?: if (Build.VERSION.SDK_INT >= 21) metadata.getBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON)?.let { downsampleArtwork(it) } else null
+                        ?: metadata.getString(MediaMetadata.METADATA_KEY_ALBUM_ART_URI)?.let { loadArtworkUri(it) }
+                        ?: metadata.getString(MediaMetadata.METADATA_KEY_ART_URI)?.let { loadArtworkUri(it) }
+                        ?: if (Build.VERSION.SDK_INT >= 21) metadata.getString(MediaMetadata.METADATA_KEY_DISPLAY_ICON_URI)?.let { loadArtworkUri(it) } else null
+                        ?: if (prefs.photoFallback) notificationArtwork[pkg]?.let { downsampleArtwork(it) } else null
+                }
+            }
+        } catch (t: Throwable) {
+            android.util.Log.w(TAG, "art extraction failed", t)
+            null
+        }
+    }
+
+    private suspend fun loadArtworkUri(text: String): Bitmap? = withContext(Dispatchers.IO) {
+        if (text.isBlank()) return@withContext null
+        try {
+            val uri = Uri.parse(text)
+            val bitmap = when (uri.scheme?.lowercase()) {
+                "http", "https" -> {
+                    var connection: HttpURLConnection? = null
+                    try {
+                        connection = URL(text).openConnection() as HttpURLConnection
+                        connection.connectTimeout = 2500
+                        connection.readTimeout = 4000
+                        connection.setRequestProperty("User-Agent", "MusWall/1.9")
+                        connection.connect()
+                        if (connection.responseCode !in 200..299) return@withContext null
+                        connection.inputStream.use { BitmapFactory.decodeStream(it) }
+                    } finally {
+                        connection?.disconnect()
+                    }
+                }
+                else -> contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it) }
+            }
+            bitmap?.let { downsampleArtwork(it) }
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    private fun cacheNotificationArtwork(sbn: StatusBarNotification) {
+        try {
+            val icon = if (Build.VERSION.SDK_INT >= 23) sbn.notification.getLargeIcon() else null
+            if (icon == null) return
+            val drawable = icon.loadDrawable(this) ?: return
+            val w = drawable.intrinsicWidth.coerceAtLeast(1).coerceAtMost(900)
+            val h = drawable.intrinsicHeight.coerceAtLeast(1).coerceAtMost(900)
+            val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+            Canvas(bitmap).also { canvas ->
+                drawable.setBounds(0, 0, w, h)
+                drawable.draw(canvas)
+            }
+            notificationArtwork.put(sbn.packageName, bitmap)?.let { if (!it.isRecycled) it.recycle() }
+        } catch (t: Throwable) {
+            android.util.Log.w(TAG, "notification art failed", t)
+        }
+    }
+
+    private fun downsampleArtwork(bitmap: Bitmap): Bitmap? {
+        return try {
+            val copy = bitmap.copy(Bitmap.Config.ARGB_8888, false) ?: return null
+            if (copy.width <= 900 && copy.height <= 900) return copy
+            val scale = minOf(900f / copy.width, 900f / copy.height)
+            Bitmap.createScaledBitmap(copy,
+                (copy.width * scale).toInt().coerceAtLeast(1),
+                (copy.height * scale).toInt().coerceAtLeast(1), true).also {
+                if (it !== copy && !copy.isRecycled) copy.recycle()
+            }
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    private fun refreshLive() {
+        sendBroadcast(Intent(MusicWallpaperService.ACTION_REFRESH).setPackage(packageName))
+    }
+
+    private fun broadcastTrack(title: String, artist: String) {
+        sendBroadcast(Intent(ACTION_TRACK_CHANGED).setPackage(packageName)
+            .putExtra(EXTRA_TRACK_TITLE, title).putExtra(EXTRA_ARTIST, artist))
+    }
+
+    private fun broadcastPlaybackState(playing: Boolean) {
+        sendBroadcast(Intent(ACTION_PLAYBACK_STATE_CHANGED).setPackage(packageName)
+            .putExtra(EXTRA_IS_PLAYING, playing))
+    }
+
+    private fun broadcastWallpaperApplied(message: String) {
+        sendBroadcast(Intent(ACTION_WALLPAPER_APPLIED).setPackage(packageName)
+            .putExtra(EXTRA_STATUS_MESSAGE, message))
+    }
+
+    override fun onNotificationPosted(sbn: StatusBarNotification?) {
+        sbn?.let { cacheNotificationArtwork(it) }
+        refreshActiveSessions()
+    }
+
+    override fun onNotificationRemoved(sbn: StatusBarNotification?) {
+        refreshActiveSessions()
+    }
+
+    override fun onDestroy() {
+        generation.incrementAndGet()
+        generationJob?.cancel()
+        runCatching { sessionManager.removeOnActiveSessionsChangedListener(sessionsListener) }
+        runCatching { activeController?.unregisterCallback(callback) }
+        notificationArtwork.values.forEach { if (!it.isRecycled) it.recycle() }
+        notificationArtwork.clear()
+        scope.cancel()
+        super.onDestroy()
+    }
+
+    private object WallpaperHelperCompat {
+        fun saveCurrent(context: android.content.Context, bitmap: Bitmap) {
+            com.muswall.app.wallpaper.WallpaperHelper(context).saveCurrentForLiveWallpaper(bitmap)
+        }
+    }
 }
