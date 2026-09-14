@@ -32,6 +32,9 @@ class MusicWallpaperService : WallpaperService() {
         private val mainHandler = Handler(Looper.getMainLooper())
         private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG or Paint.DITHER_FLAG).apply { isFilterBitmap = true }
         private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { typeface = android.graphics.Typeface.create("sans", android.graphics.Typeface.NORMAL) }
+        private val bassPaintCache = Paint(Paint.ANTI_ALIAS_FLAG)
+        private var cachedLyricsRaw = ""
+        private var cachedLyricLines: List<LyricLine> = emptyList()
         private val prefs = PreferencesManager.getInstance(applicationContext)
         private var visible = false
         private var receiverRegistered = false
@@ -108,7 +111,11 @@ class MusicWallpaperService : WallpaperService() {
             if (!prefs.showLyrics) return emptyList()
             val raw = prefs.lastLyrics.trim()
             if (raw.isBlank()) return emptyList()
-            val synced = parseLrc(raw)
+            if (raw != cachedLyricsRaw) {
+                cachedLyricsRaw = raw
+                cachedLyricLines = parseLrc(raw)
+            }
+            val synced = cachedLyricLines
             if (synced.isNotEmpty()) {
                 val index = synced.indexOfLast { it.time <= playbackPosition }.coerceAtLeast(0)
                 val from = maxOf(0, index - 1)
@@ -116,7 +123,7 @@ class MusicWallpaperService : WallpaperService() {
             }
             val plain = raw.lines().map { it.trim() }.filter { it.isNotBlank() }
             if (plain.isEmpty()) return emptyList()
-            val estimatedIndex = ((playbackPosition / 1000L) / maxOf(1L, prefs.lastLyrics.length / 12L)).toInt().coerceIn(0, plain.lastIndex)
+            val estimatedIndex = ((playbackPosition / 1000L) / maxOf(1L, raw.length / 12L)).toInt().coerceIn(0, plain.lastIndex)
             val from = maxOf(0, estimatedIndex - 1)
             return plain.subList(from, minOf(plain.size, from + prefs.lyricsLines))
         }
@@ -170,14 +177,16 @@ class MusicWallpaperService : WallpaperService() {
             val c1 = parseColor(prefs.bassColor, Color.WHITE)
             val c2 = parseColor(prefs.bassColor2, Color.CYAN)
             val c3 = parseColor(prefs.bassColor3, Color.MAGENTA)
-            val p = Paint(Paint.ANTI_ALIAS_FLAG)
+            val p = bassPaintCache
+            p.reset()
+            p.isAntiAlias = true
             p.alpha = 205
+            p.color = c1
             p.shader = when (prefs.bassColorMode) {
                 PreferencesManager.COLOR_GRADIENT, PreferencesManager.COLOR_DOUBLE -> LinearGradient(0f, 0f, canvas.width.toFloat(), 0f, c1, c2, Shader.TileMode.CLAMP)
                 PreferencesManager.COLOR_RAINBOW -> LinearGradient(0f, 0f, canvas.width.toFloat(), 0f, intArrayOf(c1, c2, c3, Color.MAGENTA), null, Shader.TileMode.MIRROR)
                 else -> null
             }
-            p.color = c1
             return p
         }
 
@@ -208,7 +217,10 @@ class MusicWallpaperService : WallpaperService() {
             var canvas: Canvas? = null
             try {
                 if (!holder.surface.isValid) return
-                canvas = holder.lockCanvas() ?: return
+                canvas = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    try { holder.lockHardwareCanvas() } catch (_: Throwable) { holder.lockCanvas() }
+                } else holder.lockCanvas()
+                if (canvas == null) return
                 canvas.drawColor(Color.BLACK)
                 val file = sourceFile() ?: return
                 val bitmap = loadBitmap(file) ?: return
@@ -230,6 +242,8 @@ class MusicWallpaperService : WallpaperService() {
             receiverRegistered = false
             cachedBitmap?.let { if (!it.isRecycled) it.recycle() }
             cachedBitmap = null
+            cachedLyricsRaw = ""
+            cachedLyricLines = emptyList()
             drawThread.quitSafely(); mainHandler.removeCallbacksAndMessages(null)
             super.onDestroy()
         }

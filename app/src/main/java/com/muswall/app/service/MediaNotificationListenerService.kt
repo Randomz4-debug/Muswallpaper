@@ -50,7 +50,7 @@ class MediaNotificationListenerService : NotificationListenerService() {
         const val EXTRA_POSITION_MS = "extra_position_ms"
     }
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val timelineHandler = Handler(Looper.getMainLooper())
     private val generation = AtomicLong(0L)
     private val timelineRunnable = object : Runnable {
@@ -63,7 +63,7 @@ class MediaNotificationListenerService : NotificationListenerService() {
                     .setPackage(packageName)
                     .putExtra(EXTRA_POSITION_MS, position)
             )
-            timelineHandler.postDelayed(this, 200L)
+            timelineHandler.postDelayed(this, 250L)
         }
     }
 
@@ -237,13 +237,16 @@ class MediaNotificationListenerService : NotificationListenerService() {
             generationJob?.cancel()
             lyricsJob?.cancel()
             prefs.liveMusicPlaying = false
+            try { wallpaperHelper.restoreOriginalLock() } catch (t: Throwable) {
+                Log.w("MusWallMedia", "Failed to restore original lock wallpaper", t)
+            }
             sendBroadcast(
                 Intent(ACTION_LIVE_TICK)
                     .setPackage(packageName)
                     .putExtra(EXTRA_POSITION_MS, prefs.lyricsPosition)
             )
             refreshLive()
-            broadcastWallpaperApplied("Music paused • wallpaper state updated")
+            broadcastWallpaperApplied("Music paused • original wallpaper restored")
         }
         sendBroadcast(Intent(ACTION_WIDGET_CHANGED).setPackage(packageName))
     }
