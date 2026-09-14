@@ -8,9 +8,11 @@ import com.muswall.app.data.PreferencesManager
 import java.io.File
 
 object PythonBridge {
+    @Volatile
     private var started = false
     private lateinit var appContext: Context
 
+    @Synchronized
     fun initialize(context: Context) {
         appContext = context.applicationContext
         if (!started) {
@@ -38,7 +40,11 @@ object PythonBridge {
         photoSource: String = PreferencesManager.PHOTO_ALBUM,
         customPhotoPath: String = ""
     ): Bitmap? {
-        if (!started) initialize(appContext)
+        if (!::appContext.isInitialized) {
+            android.util.Log.e("MusWallPython", "PythonBridge used before initialize()")
+            return null
+        }
+
         val dir = File(appContext.cacheDir, "wallpaper").apply { mkdirs() }
         val source = File(dir, "source.jpg")
         val output = File(dir, "result.jpg")
