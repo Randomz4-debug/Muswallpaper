@@ -122,7 +122,7 @@ class PreferencesManager private constructor(context: Context) {
     var widgetEmptyTitle: String get() = sp.getString("widget_empty_title", "No music playing") ?: "No music playing"; set(v) = sp.edit().putString("widget_empty_title", v).apply()
     var widgetTextColor: String get() = sp.getString("widget_text_color", "#FFFFFF") ?: "#FFFFFF"; set(v) = sp.edit().putString("widget_text_color", v).apply()
     var widgetSecondaryColor: String get() = sp.getString("widget_secondary_color", "#C7C7D0") ?: "#C7C7D0"; set(v) = sp.edit().putString("widget_secondary_color", v).apply()
-    var widgetBackgroundColor: String get() = sp.getString("widget_background_color", "#17151F") ?: "#17151F"; set(v) = sp.edit().putString("widget_background_color", v).apply(v)
+    var widgetBackgroundColor: String get() = sp.getString("widget_background_color", "#17151F") ?: "#17151F"; set(v) = sp.edit().putString("widget_background_color", v).apply()
     var widgetTitleSize: Int get() = sp.getInt("widget_title_size", 15); set(v) = sp.edit().putInt("widget_title_size", v.coerceIn(10, 28)).apply()
     var widgetArtistSize: Int get() = sp.getInt("widget_artist_size", 12); set(v) = sp.edit().putInt("widget_artist_size", v.coerceIn(8, 22)).apply()
     var widgetCustomTextSize: Int get() = sp.getInt("widget_custom_text_size", 11); set(v) = sp.edit().putInt("widget_custom_text_size", v.coerceIn(8, 22)).apply()
