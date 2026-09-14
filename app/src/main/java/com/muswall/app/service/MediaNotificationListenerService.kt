@@ -52,6 +52,7 @@ class MediaNotificationListenerService : NotificationListenerService() {
     override fun onCreate() {
         super.onCreate()
         prefs = PreferencesManager.getInstance(this)
+        PythonBridge.initialize(this)
         wallpaperHelper = WallpaperHelper(this)
     }
 

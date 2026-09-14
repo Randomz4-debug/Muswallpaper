@@ -76,6 +76,7 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
         prefs = PreferencesManager.getInstance(this)
+        com.muswall.app.python.PythonBridge.initialize(this)
         wallpaperHelper = WallpaperHelper(this)
 
         imageHome = findViewById(R.id.imageHomePreview)
