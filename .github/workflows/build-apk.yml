@@ -22,9 +22,6 @@ jobs:
       - name: Apply source fixes
         run: python3 tools/fix_build_and_lyrics.py
 
-      - name: Apply live wallpaper performance fixes
-        run: python3 tools/fix_live_performance.py
-
       - name: Apply sync, highlight and glass widget fixes
         run: python3 tools/fix_sync_glass_performance.py
 
