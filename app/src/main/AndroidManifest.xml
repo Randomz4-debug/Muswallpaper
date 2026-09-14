@@ -1,5 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <queries>
+        <intent>
+            <action android:name="android.service.wallpaper.WallpaperService" />
+        </intent>
+    </queries>
     <uses-permission android:name="android.permission.SET_WALLPAPER" />
     <uses-permission android:name="android.permission.SET_WALLPAPER_HINTS" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
@@ -23,27 +28,14 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-
-        <service
-            android:name=".wallpaper.MusicWallpaperService"
-            android:exported="true"
-            android:label="MusWall Live Wallpaper"
-            android:permission="android.permission.BIND_WALLPAPER">
+        <service android:name=".wallpaper.MusicWallpaperService" android:exported="true" android:label="MusWall Live Wallpaper" android:permission="android.permission.BIND_WALLPAPER">
             <intent-filter><action android:name="android.service.wallpaper.WallpaperService" /></intent-filter>
             <meta-data android:name="android.service.wallpaper" android:resource="@xml/music_wallpaper" />
         </service>
-
-        <service
-            android:name=".service.MediaNotificationListenerService"
-            android:exported="true"
-            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+        <service android:name=".service.MediaNotificationListenerService" android:exported="true" android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
             <intent-filter><action android:name="android.service.notification.NotificationListenerService" /></intent-filter>
         </service>
-
-        <receiver
-            android:name=".widget.MusicWidgetProvider"
-            android:exported="true"
-            android:label="MusWall Music Widget">
+        <receiver android:name=".widget.MusicWidgetProvider" android:exported="true" android:label="MusWall Music Widget">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
                 <action android:name="com.muswall.app.ACTION_TRACK_CHANGED" />
