@@ -74,16 +74,10 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        // The main UI must never be replaced by a generic fallback because one
-        // optional control failed. Load the screen first, then initialize each
-        // feature independently so one bad preference/control cannot break launch.
         setContentView(R.layout.activity_main)
 
         prefs = PreferencesManager.getInstance(this)
         wallpaperHelper = WallpaperHelper(this)
-
-        // Only register the application context. Chaquopy/Python is still lazy.
         com.muswall.app.python.PythonBridge.initialize(this)
 
         imageHome = findViewById(R.id.imageHomePreview)
@@ -245,7 +239,7 @@ class MainActivity : AppCompatActivity() {
     private fun schedulePreview() {
         previewJob?.cancel()
         previewJob = uiScope.launch {
-            delay(280)
+            delay(80)
             if (prefs.wallpaperMode == PreferencesManager.MODE_STATIC && selectedUri != null) loadPreviewFromUri(selectedUri!!)
             else loadCurrentPreview()
         }
@@ -325,43 +319,42 @@ class MainActivity : AppCompatActivity() {
 
     private fun applyCurrent() {
         uiScope.launch {
-            val source = if (prefs.wallpaperMode == PreferencesManager.MODE_STATIC) {
-                selectedUri?.let { decodeUriForRender(it) }
-            } else {
-                File(filesDir, WallpaperHelper.FILE_CURRENT).takeIf { it.exists() }?.let { decodeSampled(it, 1600, 1600) }
-            }
-            if (source == null) {
-                Toast.makeText(this@MainActivity, "Choose an image or play music first", Toast.LENGTH_LONG).show()
+            if (prefs.wallpaperMode != PreferencesManager.MODE_STATIC) {
+                prefs.liveWallpaperEnabled = true
+                wallpaperHelper.openLiveWallpaperPicker()
                 return@launch
             }
-            if (selectedUri != null || prefs.wallpaperMode == PreferencesManager.MODE_STATIC) {
-                val dm = resources.displayMetrics
-                val rendered = com.muswall.app.python.PythonBridge.generateWallpaper(
-                    source,
-                    (dm.widthPixels * 0.75f).toInt().coerceIn(480, 900),
-                    (dm.heightPixels * 0.75f).toInt().coerceIn(960, 1800),
-                    prefs.blurRadius.toFloat(), prefs.darkness / 100f, prefs.artScale / 100f,
-                    42, true, prefs.effect, prefs.blurType, prefs.coverHeight, prefs.coverOffset, prefs.transitionHeight
-                )
-                if (rendered == null) {
-                    Toast.makeText(this@MainActivity, "Could not render wallpaper", Toast.LENGTH_LONG).show()
-                    return@launch
-                }
-                val result = wallpaperHelper.applyStatic(rendered, prefs.targetScreen)
-                if (result.success) {
-                    wallpaperHelper.saveCurrentForLiveWallpaper(rendered)
-                    // Do not hand a bitmap to ImageView and then recycle it.
-                    // Reload a bounded preview from disk instead.
-                    if (!rendered.isRecycled) rendered.recycle()
-                    loadCurrentPreview()
-                } else if (!rendered.isRecycled) {
-                    rendered.recycle()
-                }
-                Toast.makeText(this@MainActivity, if (result.success) "Wallpaper applied" else "Failed: ${result.message}", Toast.LENGTH_LONG).show()
-                if (!source.isRecycled) source.recycle()
-            } else {
-                wallpaperHelper.openLiveWallpaperPicker()
+
+            val source = selectedUri?.let { decodeUriForRender(it) }
+            if (source == null) {
+                Toast.makeText(this@MainActivity, "Choose an image first", Toast.LENGTH_LONG).show()
+                return@launch
             }
+
+            val dm = resources.displayMetrics
+            val rendered = com.muswall.app.python.PythonBridge.generateWallpaper(
+                source,
+                (dm.widthPixels * 0.75f).toInt().coerceIn(480, 900),
+                (dm.heightPixels * 0.75f).toInt().coerceIn(960, 1800),
+                prefs.blurRadius.toFloat(), prefs.darkness / 100f, prefs.artScale / 100f,
+                42, true, prefs.effect, prefs.blurType, prefs.coverHeight, prefs.coverOffset, prefs.transitionHeight
+            )
+            if (rendered == null) {
+                if (!source.isRecycled) source.recycle()
+                Toast.makeText(this@MainActivity, "Could not render wallpaper", Toast.LENGTH_LONG).show()
+                return@launch
+            }
+
+            val result = wallpaperHelper.applyStatic(rendered, prefs.targetScreen)
+            if (result.success) {
+                wallpaperHelper.saveCurrentForLiveWallpaper(rendered)
+                if (!rendered.isRecycled) rendered.recycle()
+                loadCurrentPreview()
+            } else if (!rendered.isRecycled) {
+                rendered.recycle()
+            }
+            if (!source.isRecycled) source.recycle()
+            Toast.makeText(this@MainActivity, if (result.success) "Wallpaper applied" else "Failed: ${result.message}", Toast.LENGTH_LONG).show()
         }
     }
 
