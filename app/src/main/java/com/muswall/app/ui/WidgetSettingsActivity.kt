@@ -16,7 +16,6 @@ import com.muswall.app.service.MediaNotificationListenerService
 class WidgetSettingsActivity : AppCompatActivity() {
     private lateinit var prefs: PreferencesManager
     private var appWidgetId = AppWidgetManager.INVALID_APPWIDGET_ID
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         prefs = PreferencesManager.getInstance(this)
@@ -31,10 +30,21 @@ class WidgetSettingsActivity : AppCompatActivity() {
         bindSwitch(R.id.widgetProgressSwitch, prefs.widgetShowProgress) { prefs.widgetShowProgress = it }
         bindSwitch(R.id.widgetCustomSwitch, prefs.widgetShowCustomText) { prefs.widgetShowCustomText = it }
         bindSwitch(R.id.widgetTimeSwitch, prefs.widgetShowTime) { prefs.widgetShowTime = it }
-        findViewById<SeekBar>(R.id.widgetOpacity).apply { max = 100; progress = prefs.widgetOpacity; setOnSeekBarChangeListener(listener { prefs.widgetOpacity = it }) }
-        findViewById<SeekBar>(R.id.widgetTitleSize).apply { max = 18; progress = prefs.widgetTitleSize - 10; setOnSeekBarChangeListener(listener { prefs.widgetTitleSize = it + 10 }) }
-        findViewById<SeekBar>(R.id.widgetArtistSize).apply { max = 14; progress = prefs.widgetArtistSize - 8; setOnSeekBarChangeListener(listener { prefs.widgetArtistSize = it + 8 }) }
-        findViewById<SeekBar>(R.id.widgetCustomSize).apply { max = 14; progress = prefs.widgetCustomTextSize - 8; setOnSeekBarChangeListener(listener { prefs.widgetCustomTextSize = it + 8 }) }
+        bindSeek(R.id.widgetOpacity, 0, 100, prefs.widgetOpacity) { prefs.widgetOpacity = it }
+        bindSeek(R.id.widgetTitleSize, 10, 28, prefs.widgetTitleSize) { prefs.widgetTitleSize = it }
+        bindSeek(R.id.widgetArtistSize, 8, 22, prefs.widgetArtistSize) { prefs.widgetArtistSize = it }
+        bindSeek(R.id.widgetCustomSize, 8, 22, prefs.widgetCustomTextSize) { prefs.widgetCustomTextSize = it }
+        bindSeek(R.id.widgetArtworkSize, 32, 140, prefs.widgetArtworkSize) { prefs.widgetArtworkSize = it }
+        bindSeek(R.id.widgetCornerRadius, 0, 50, prefs.widgetCornerRadius) { prefs.widgetCornerRadius = it }
+        bindSeek(R.id.widgetPadding, 0, 30, prefs.widgetPadding) { prefs.widgetPadding = it }
+        findViewById<TextView>(R.id.widgetLayoutChoice).apply {
+            text = if (prefs.widgetLayout == 0) "Horizontal" else "Compact"
+            setOnClickListener {
+                prefs.widgetLayout = if (prefs.widgetLayout == 0) 1 else 0
+                text = if (prefs.widgetLayout == 0) "Horizontal" else "Compact"
+                notifyWidgets()
+            }
+        }
         findViewById<EditText>(R.id.widgetCustomText).setText(prefs.widgetCustomText)
         findViewById<EditText>(R.id.widgetEmptyText).setText(prefs.widgetEmptyTitle)
         findViewById<EditText>(R.id.widgetTextColor).setText(prefs.widgetTextColor)
@@ -48,19 +58,14 @@ class WidgetSettingsActivity : AppCompatActivity() {
             prefs.widgetSecondaryColor = findViewById<EditText>(R.id.widgetSecondaryColor).text.toString().ifBlank { "#C7C7D0" }
             prefs.widgetBackgroundColor = findViewById<EditText>(R.id.widgetBackgroundColor).text.toString().ifBlank { "#17151F" }
             prefs.widgetCustomTimeLabel = findViewById<EditText>(R.id.widgetTimeLabel).text.toString().ifBlank { "Now Playing" }
-            sendBroadcast(Intent(MediaNotificationListenerService.ACTION_SETTINGS_CHANGED).setPackage(packageName))
+            notifyWidgets()
             setResult(Activity.RESULT_OK, Intent().putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId))
             finish()
         }
     }
-
-    private fun bindSwitch(id: Int, checked: Boolean, save: (Boolean) -> Unit) {
-        findViewById<SwitchCompat>(id).apply { isChecked = checked; setOnCheckedChangeListener { _, value -> save(value) } }
+    private fun bindSwitch(id: Int, checked: Boolean, save: (Boolean) -> Unit) { findViewById<SwitchCompat>(id).apply { isChecked = checked; setOnCheckedChangeListener { _, value -> save(value); notifyWidgets() } } }
+    private fun bindSeek(id: Int, min: Int, max: Int, value: Int, save: (Int) -> Unit) {
+        findViewById<SeekBar>(id).apply { this.max = max - min; progress = (value - min).coerceIn(0, max - min); setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener { override fun onProgressChanged(s: SeekBar?, p: Int, fromUser: Boolean) { if (fromUser) { save(p + min); notifyWidgets() } }; override fun onStartTrackingTouch(s: SeekBar?) {}; override fun onStopTrackingTouch(s: SeekBar?) {} }) }
     }
-
-    private fun listener(save: (Int) -> Unit) = object : SeekBar.OnSeekBarChangeListener {
-        override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) { if (fromUser) save(progress) }
-        override fun onStartTrackingTouch(seekBar: SeekBar?) {}
-        override fun onStopTrackingTouch(seekBar: SeekBar?) {}
-    }
+    private fun notifyWidgets() { sendBroadcast(Intent(MediaNotificationListenerService.ACTION_WIDGET_CHANGED).setPackage(packageName)) }
 }
