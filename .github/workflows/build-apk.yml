@@ -31,15 +31,18 @@ jobs:
       - name: Apply live wallpaper architecture fixes
         run: python3 tools/fix_music_live_architecture.py
 
+      - name: Apply Spotify-style lyric overlay
+        run: python3 tools/fix_spotify_lyrics_overlay.py
+
       - name: Commit source fixes
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add app/src/main/java/com/muswall/app/ui/SettingsActivity.kt app/src/main/java/com/muswall/app/service/MediaNotificationListenerService.kt app/src/main/java/com/muswall/app/wallpaper/MusicWallpaperService.kt app/src/main/java/com/muswall/app/wallpaper/WallpaperHelper.kt app/src/main/java/com/muswall/app/widget/MusicWidgetProvider.kt app/src/main/res/layout/widget_music.xml app/src/main/java/com/muswall/app/data/PreferencesManager.kt tools/fix_sync_glass_performance.py tools/fix_poco_lock_and_performance.py tools/fix_music_live_architecture.py
+          git add app/src/main/java/com/muswall/app/ui/SettingsActivity.kt app/src/main/java/com/muswall/app/service/MediaNotificationListenerService.kt app/src/main/java/com/muswall/app/service/UniversalLyricsReceiver.kt app/src/main/java/com/muswall/app/wallpaper/MusicWallpaperService.kt app/src/main/java/com/muswall/app/wallpaper/WallpaperHelper.kt app/src/main/java/com/muswall/app/widget/MusicWidgetProvider.kt app/src/main/res/layout/widget_music.xml app/src/main/java/com/muswall/app/data/PreferencesManager.kt tools/fix_sync_glass_performance.py tools/fix_poco_lock_and_performance.py tools/fix_music_live_architecture.py tools/fix_spotify_lyrics_overlay.py
           if git diff --cached --quiet; then
             echo "No source changes to commit"
           else
-            git commit -m "Use live wallpaper for smooth music transitions"
+            git commit -m "Add smooth Spotify-style synced lyrics"
             git push
           fi
 
