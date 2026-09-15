@@ -143,7 +143,7 @@ class MusicWallpaperService : WallpaperService() {
                 return (min.toLong() * 60000L) + (sec.toLong() * 1000L) + f
             }
 
-            raw.replace("\\r", "").split('\\n').forEach { original ->
+            raw.lines().forEach { original ->
                 val line = original.trim()
                 val m = lineRegex.matchEntire(line) ?: return@forEach
                 val lineTime = timestamp(m.groupValues[1], m.groupValues[2], m.groupValues[3])
@@ -250,18 +250,43 @@ class MusicWallpaperService : WallpaperService() {
             val startY = y - ((lines.size - 1) * lineHeight / 2f)
             lines.forEachIndexed { index, item ->
                 val active = item.second
-                textPaint.textSize = if (active) baseSize * 1.08f else baseSize * 0.92f
-                textPaint.alpha = if (active) 255 else 125
-                textPaint.color = parseColor(if (active) prefs.lyricsColor else prefs.lyricsColor2, Color.WHITE)
-                applyTextShader(canvas.width.toFloat(), canvas.height.toFloat())
-                val safe = if (textPaint.measureText(item.first.text) > maxWidth) ellipsize(item.first.text, maxWidth) else item.first.text
+                val line = item.first
                 val yy = startY + index * lineHeight
-                if (prefs.lyricsShadow || active) {
-                    textPaint.setShadowLayer(if (active) 12f else 5f, 0f, 2f, Color.BLACK)
-                    canvas.drawText(safe, x, yy, textPaint)
-                    textPaint.clearShadowLayer()
-                } else canvas.drawText(safe, x, yy, textPaint)
-                textPaint.shader = null
+                textPaint.textSize = if (active) baseSize * 1.08f else baseSize * 0.92f
+
+                if (active && line.words.isNotEmpty()) {
+                    val space = textPaint.measureText(" ")
+                    val total = line.words.sumOf { textPaint.measureText(it.text).toDouble() }.toFloat() + space * (line.words.size - 1)
+                    var cursor = x - total / 2f
+                    line.words.forEach { word ->
+                        val width = textPaint.measureText(word.text)
+                        val spoken = playbackPosition >= word.start && playbackPosition < word.end
+                        textPaint.alpha = if (spoken) 255 else 135
+                        textPaint.color = parseColor(if (spoken) prefs.lyricsColor else prefs.lyricsColor2, Color.WHITE)
+                        textPaint.shader = null
+                        if (spoken || prefs.lyricsShadow) {
+                            textPaint.setShadowLayer(if (spoken) 12f else 5f, 0f, 2f, Color.BLACK)
+                            canvas.drawText(word.text, cursor + width / 2f, yy, textPaint)
+                            textPaint.clearShadowLayer()
+                        } else {
+                            canvas.drawText(word.text, cursor + width / 2f, yy, textPaint)
+                        }
+                        cursor += width + space
+                    }
+                } else {
+                    textPaint.alpha = if (active) 255 else 125
+                    textPaint.color = parseColor(if (active) prefs.lyricsColor else prefs.lyricsColor2, Color.WHITE)
+                    applyTextShader(canvas.width.toFloat(), canvas.height.toFloat())
+                    val safe = if (textPaint.measureText(line.text) > maxWidth) ellipsize(line.text, maxWidth) else line.text
+                    if (prefs.lyricsShadow || active) {
+                        textPaint.setShadowLayer(if (active) 12f else 5f, 0f, 2f, Color.BLACK)
+                        canvas.drawText(safe, x, yy, textPaint)
+                        textPaint.clearShadowLayer()
+                    } else {
+                        canvas.drawText(safe, x, yy, textPaint)
+                    }
+                    textPaint.shader = null
+                }
             }
             textPaint.alpha = 255
         }

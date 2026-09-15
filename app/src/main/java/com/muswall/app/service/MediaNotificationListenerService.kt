@@ -63,7 +63,9 @@ class MediaNotificationListenerService : NotificationListenerService() {
             val updateTime = state?.lastPositionUpdateTime ?: 0L
             val elapsed = if (updateTime > 0L) (android.os.SystemClock.elapsedRealtime() - updateTime).coerceAtLeast(0L) else 0L
             val position = (basePosition + elapsed).coerceAtLeast(0L)
-            // Only send a lightweight checkpoint. The wallpaper interpolates locally.
+            val jumped = lastObservedPosition >= 0L && kotlin.math.abs(position - lastObservedPosition) > 750L
+            lastObservedPosition = position
+            if (jumped) prefs.lyricsPosition = position
             sendBroadcast(Intent(ACTION_LIVE_TICK).setPackage(packageName).putExtra(EXTRA_POSITION_MS, position))
             timelineHandler.postDelayed(this, 1000L)
         }
@@ -77,6 +79,7 @@ class MediaNotificationListenerService : NotificationListenerService() {
     private var currentTrackId = ""
     private var playing = false
     private var lastPlaybackState = PlaybackState.STATE_NONE
+    private var lastObservedPosition = -1L
     private var generationJob: Job? = null
     private val stableStopRunnable = Runnable {
         val state = activeController?.playbackState?.state
