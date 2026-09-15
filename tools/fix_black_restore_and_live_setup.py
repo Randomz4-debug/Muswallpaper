@@ -5,12 +5,10 @@ HELPER = Path('app/src/main/java/com/muswall/app/wallpaper/WallpaperHelper.kt')
 LIVE = Path('app/src/main/java/com/muswall/app/wallpaper/MusicWallpaperService.kt')
 MEDIA = Path('app/src/main/java/com/muswall/app/service/MediaNotificationListenerService.kt')
 
+# ---------- Reliable original-wallpaper backup ----------
 m = MAIN.read_text()
 old = 'findViewById<MaterialButton>(R.id.btnLiveWallpaper).setOnClickListener { prefs.liveWallpaperEnabled = true; wallpaperHelper.openLiveWallpaperPicker() }'
 new = '''findViewById<MaterialButton>(R.id.btnLiveWallpaper).setOnClickListener {
-            // Capture the user's real wallpaper BEFORE HyperOS switches to MusWall.
-            // This is essential on Android 14+/HyperOS because the old lock wallpaper
-            // may no longer be readable after a live wallpaper becomes active.
             uiScope.launch(Dispatchers.IO) {
                 wallpaperHelper.prepareOriginalBeforeLiveWallpaper()
                 withContext(Dispatchers.Main) {
@@ -20,8 +18,7 @@ new = '''findViewById<MaterialButton>(R.id.btnLiveWallpaper).setOnClickListener 
             }
         }'''
 if old in m:
-    m = m.replace(old, new)
-MAIN.write_text(m)
+    MAIN.write_text(m.replace(old, new))
 
 h = HELPER.read_text()
 old = '''    suspend fun prepareOriginalBeforeLiveWallpaper(): Boolean = withContext(Dispatchers.IO) {
@@ -44,8 +41,6 @@ old = '''    suspend fun prepareOriginalBeforeLiveWallpaper(): Boolean = withCon
     }'''
 new = '''    suspend fun prepareOriginalBeforeLiveWallpaper(): Boolean = withContext(Dispatchers.IO) {
         try {
-            // Prefer an image explicitly selected inside MusWall. This is the most reliable
-            // restore source on Android 14+/HyperOS after live-wallpaper switching.
             val selected = prefs.staticWallpaperUri.trim()
             if (selected.isNotBlank()) {
                 val uri = runCatching { Uri.parse(selected) }.getOrNull()
@@ -86,17 +81,19 @@ new = '''    suspend fun prepareOriginalBeforeLiveWallpaper(): Boolean = withCon
         }
     }'''
 if old in h:
-    h = h.replace(old, new)
-HELPER.write_text(h)
+    HELPER.write_text(h.replace(old, new))
 
-# Fix the Kotlin newline parsing emitted by the earlier lyrics patch. Using lines()
-# also handles CRLF safely and avoids Kotlin character-literal escape errors.
+# ---------- Lyrics parser: eliminate invalid Kotlin character escapes ----------
 l = LIVE.read_text()
-l = l.replace("raw.replace(\\"\\\\r\\", \\\"\\\").split('\\\\n').forEach", "raw.lines().forEach")
-l = l.replace("raw.replace(\\"\\\\r\\", \\\"\\\").split('\\\\n').forEach", "raw.lines().forEach")
+bad = '''raw.replace("\\\\r", "").split('\\\\n').forEach'''
+if bad in l:
+    l = l.replace(bad, "raw.lines().forEach")
+# Handle the variant produced by older fixer versions as well.
+bad2 = '''raw.replace("\\r", "").split('\\n').forEach'''
+if bad2 in l:
+    l = l.replace(bad2, "raw.lines().forEach")
 
-# Make the lyric renderer actually use enhanced-LRC word timestamps. Standard LRC
-# remains line-synchronised; enhanced LRC gets a moving word highlight.
+# ---------- Spotify-style word highlighting for enhanced LRC ----------
 start = l.index('        private fun drawLyrics(canvas: Canvas) {')
 end = l.index('        private fun bassPaint', start)
 replacement = '''        private fun drawLyrics(canvas: Canvas) {
@@ -113,33 +110,28 @@ replacement = '''        private fun drawLyrics(canvas: Canvas) {
             val startY = y - ((lines.size - 1) * lineHeight / 2f)
             lines.forEachIndexed { index, item ->
                 val active = item.second
-                textPaint.textSize = if (active) baseSize * 1.08f else baseSize * 0.92f
-                textPaint.alpha = if (active) 255 else 125
-                val yy = startY + index * lineHeight
                 val line = item.first
+                val yy = startY + index * lineHeight
+                textPaint.textSize = if (active) baseSize * 1.08f else baseSize * 0.92f
 
                 if (active && line.words.isNotEmpty()) {
-                    // Draw enhanced-LRC words separately so the currently spoken word
-                    // can be highlighted without changing the timing of the other words.
-                    val total = line.words.sumOf { textPaint.measureText(it.text) } + (line.words.size - 1) * textPaint.measureText(" ")
-                    val startX = x - total / 2f
-                    var cursor = startX
+                    val space = textPaint.measureText(" ")
+                    val total = line.words.sumOf { textPaint.measureText(it.text).toDouble() }.toFloat() + space * (line.words.size - 1)
+                    var cursor = x - total / 2f
                     line.words.forEach { word ->
-                        val wordWidth = textPaint.measureText(word.text)
-                        val center = cursor + wordWidth / 2f
+                        val width = textPaint.measureText(word.text)
                         val spoken = playbackPosition >= word.start && playbackPosition < word.end
                         textPaint.alpha = if (spoken) 255 else 135
                         textPaint.color = parseColor(if (spoken) prefs.lyricsColor else prefs.lyricsColor2, Color.WHITE)
-                        applyTextShader(canvas.width.toFloat(), canvas.height.toFloat())
+                        textPaint.shader = null
                         if (spoken || prefs.lyricsShadow) {
                             textPaint.setShadowLayer(if (spoken) 12f else 5f, 0f, 2f, Color.BLACK)
-                            canvas.drawText(word.text, center, yy, textPaint)
+                            canvas.drawText(word.text, cursor + width / 2f, yy, textPaint)
                             textPaint.clearShadowLayer()
                         } else {
-                            canvas.drawText(word.text, center, yy, textPaint)
+                            canvas.drawText(word.text, cursor + width / 2f, yy, textPaint)
                         }
-                        textPaint.shader = null
-                        cursor += wordWidth + textPaint.measureText(" ")
+                        cursor += width + space
                     }
                 } else {
                     textPaint.alpha = if (active) 255 else 125
@@ -163,13 +155,11 @@ replacement = '''        private fun drawLyrics(canvas: Canvas) {
 l = l[:start] + replacement + l[end:]
 LIVE.write_text(l)
 
-# Detect seeks/scrubs even when the playback state remains PLAYING. The lyric clock
-# then jumps immediately instead of waiting for the next metadata event.
+# ---------- Immediate resync when the user seeks/rewinds/fast-forwards ----------
 md = MEDIA.read_text()
 needle = '    private var lastPlaybackState = PlaybackState.STATE_NONE\n'
-insert = '    private var lastPlaybackState = PlaybackState.STATE_NONE\n    private var lastObservedPosition = -1L\n'
-if needle in md and 'lastObservedPosition' not in md:
-    md = md.replace(needle, insert)
+if 'private var lastObservedPosition = -1L' not in md and needle in md:
+    md = md.replace(needle, needle + '    private var lastObservedPosition = -1L\n')
 old_tick = '''            val position = (basePosition + elapsed).coerceAtLeast(0L)
             // Only send a lightweight checkpoint. The wallpaper interpolates locally.
             sendBroadcast(Intent(ACTION_LIVE_TICK).setPackage(packageName).putExtra(EXTRA_POSITION_MS, position))'''
@@ -177,8 +167,6 @@ new_tick = '''            val position = (basePosition + elapsed).coerceAtLeast(
             val jumped = lastObservedPosition >= 0L && kotlin.math.abs(position - lastObservedPosition) > 750L
             lastObservedPosition = position
             if (jumped) prefs.lyricsPosition = position
-            // Lightweight checkpoints keep the wallpaper smooth while large jumps from
-            // seeking/rewinding/fast-forwarding immediately resynchronise the lyrics.
             sendBroadcast(Intent(ACTION_LIVE_TICK).setPackage(packageName).putExtra(EXTRA_POSITION_MS, position))'''
 if old_tick in md:
     md = md.replace(old_tick, new_tick)
