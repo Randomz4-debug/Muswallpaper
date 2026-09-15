@@ -23,7 +23,8 @@ import kotlin.math.sin
 
 class MusicWallpaperService : WallpaperService() {
     companion object { const val ACTION_REFRESH = "com.muswall.app.REFRESH_LIVE_WALLPAPER" }
-    private data class LyricLine(val time: Long, val text: String)
+    private data class LyricWord(val start: Long, val end: Long, val text: String, val startIndex: Int, val endIndex: Int)
+    private data class LyricLine(val time: Long, val text: String, val words: List<LyricWord> = emptyList())
     override fun onCreateEngine(): Engine = MusicEngine()
 
     inner class MusicEngine : Engine() {
@@ -132,15 +133,60 @@ class MusicWallpaperService : WallpaperService() {
 
         private fun parseLrc(raw: String): List<LyricLine> {
             val result = ArrayList<LyricLine>()
-            val regex = Regex("\\[(\\d{1,3}):(\\d{2})(?:[.:](\\d{1,3}))?\\]\\s*(.*)")
-            raw.replace("\\r", "").split('\n').forEach { line ->
-                val m = regex.matchEntire(line.trim()) ?: return@forEach
-                val minutes = m.groupValues[1].toLongOrNull() ?: return@forEach
-                val seconds = m.groupValues[2].toLongOrNull() ?: 0L
-                val fraction = m.groupValues[3].takeIf { it.isNotBlank() }?.let { when (it.length) { 1 -> it.toLong() * 100L; 2 -> it.toLong() * 10L; else -> it.take(3).toLong() } } ?: 0L
-                result += LyricLine(minutes * 60000L + seconds * 1000L + fraction, m.groupValues[4].trim())
+            val lineRegex = Regex("\\[(\\d{1,3}):(\\d{2})(?:[.:](\\d{1,3}))?\\]\\s*(.*)")
+            val wordRegex = Regex("<(?:(\\d{1,3}):(\\d{2})(?:[.:](\\d{1,3}))?)>")
+
+            fun timestamp(min: String, sec: String, fraction: String): Long {
+                val f = fraction.takeIf { it.isNotBlank() }?.let {
+                    when (it.length) { 1 -> it.toLong() * 100L; 2 -> it.toLong() * 10L; else -> it.take(3).toLong() }
+                } ?: 0L
+                return (min.toLong() * 60000L) + (sec.toLong() * 1000L) + f
             }
-            return result.sortedBy { it.time }
+
+            raw.replace("\\r", "").split('\\n').forEach { original ->
+                val line = original.trim()
+                val m = lineRegex.matchEntire(line) ?: return@forEach
+                val lineTime = timestamp(m.groupValues[1], m.groupValues[2], m.groupValues[3])
+                val body = m.groupValues[4].trim()
+                if (body.isBlank()) return@forEach
+
+                val markers = wordRegex.findAll(body).toList()
+                if (markers.isEmpty()) {
+                    result += LyricLine(lineTime, body)
+                    return@forEach
+                }
+
+                val clean = StringBuilder()
+                val words = ArrayList<LyricWord>()
+                markers.forEachIndexed { i, marker ->
+                    val textStart = marker.range.last + 1
+                    val textEnd = if (i + 1 < markers.size) markers[i + 1].range.first else body.length
+                    val wordText = body.substring(textStart, textEnd).trim()
+                    if (wordText.isBlank()) return@forEachIndexed
+                    val wm = Regex("<(?:(\\d{1,3}):(\\d{2})(?:[.:](\\d{1,3}))?)>").matchEntire(marker.value) ?: return@forEachIndexed
+                    val wordTime = timestamp(wm.groupValues[1], wm.groupValues[2], wm.groupValues[3])
+                    val startIndex = clean.length
+                    if (clean.isNotEmpty()) clean.append(' ')
+                    val actualStart = clean.length
+                    clean.append(wordText)
+                    words += LyricWord(wordTime, wordTime, wordText, actualStart, clean.length)
+                }
+                result += LyricLine(lineTime, clean.toString().trim(), words)
+            }
+
+            // Enhanced LRC normally provides only each word's start time. Derive its end
+            // from the next word or the next lyric line, keeping the highlight smooth.
+            return result.sortedBy { it.time }.mapIndexed { index, line ->
+                if (line.words.isEmpty()) line else {
+                    val lineEnd = result.sortedBy { it.time }.getOrNull(index + 1)?.time
+                        ?: (line.time + 5000L)
+                    val fixed = line.words.mapIndexed { wi, word ->
+                        val next = line.words.getOrNull(wi + 1)?.start ?: lineEnd
+                        word.copy(end = maxOf(word.start + 80L, next))
+                    }
+                    line.copy(words = fixed)
+                }
+            }
         }
 
         private fun currentLyricLines(): List<Pair<LyricLine, Boolean>> {
@@ -159,6 +205,8 @@ class MusicWallpaperService : WallpaperService() {
                 val to = minOf(synced.size, from + prefs.lyricsLines)
                 return synced.subList(from, to).mapIndexed { i, line -> Pair(line, from + i == activeIndex) }
             }
+
+            // Plain lyrics fallback: distribute lines across the known track duration.
             val plain = raw.lines().map { it.trim() }.filter { it.isNotBlank() }
             if (plain.isEmpty()) return emptyList()
             val step = maxOf(1200L, (prefs.lastDuration / maxOf(1, plain.size)).coerceAtLeast(1200L))
@@ -166,7 +214,9 @@ class MusicWallpaperService : WallpaperService() {
             val half = maxOf(0, prefs.lyricsLines / 2)
             val from = (activeIndex - half).coerceAtLeast(0)
             val to = minOf(plain.size, from + prefs.lyricsLines)
-            return plain.subList(from, to).mapIndexed { i, text -> Pair(LyricLine((from + i) * step, text), from + i == activeIndex) }
+            return plain.subList(from, to).mapIndexed { i, text ->
+                Pair(LyricLine((from + i) * step, text), from + i == activeIndex)
+            }
         }
 
         private fun ellipsize(value: String, width: Float): String {
@@ -203,21 +253,69 @@ class MusicWallpaperService : WallpaperService() {
             val lineHeight = baseSize * 1.35f
             val startY = y - ((lines.size - 1) * lineHeight / 2f)
             lines.forEachIndexed { index, item ->
+                val line = item.first
                 val active = item.second
                 textPaint.textSize = if (active) baseSize * 1.08f else baseSize * 0.92f
                 textPaint.alpha = if (active) 255 else 125
-                textPaint.color = parseColor(if (active) prefs.lyricsColor else prefs.lyricsColor2, Color.WHITE)
-                applyTextShader(canvas.width.toFloat(), canvas.height.toFloat())
-                val safe = if (textPaint.measureText(item.first.text) > maxWidth) ellipsize(item.first.text, maxWidth) else item.first.text
+                textPaint.color = parseColor(if (active) prefs.lyricsColor2 else prefs.lyricsColor, Color.WHITE)
+                textPaint.shader = null
+                val safe = if (textPaint.measureText(line.text) > maxWidth) ellipsize(line.text, maxWidth) else line.text
                 val yy = startY + index * lineHeight
+
                 if (prefs.lyricsShadow || active) {
                     textPaint.setShadowLayer(if (active) 12f else 5f, 0f, 2f, Color.BLACK)
                     canvas.drawText(safe, x, yy, textPaint)
                     textPaint.clearShadowLayer()
-                } else canvas.drawText(safe, x, yy, textPaint)
+                } else {
+                    canvas.drawText(safe, x, yy, textPaint)
+                }
+
+                // Spotify-style word highlight. If the provider gives enhanced-LRC word
+                // timestamps, use them directly. For ordinary line-timed LRC, smoothly
+                // estimate the spoken word currently in the line from the line interval.
+                if (active && safe == line.text) {
+                    val word = activeWord(line)
+                    if (word != null) drawHighlightedWord(canvas, line.text, word, x, yy, baseSize * 1.08f, maxWidth)
+                }
+                textPaint.alpha = 255
                 textPaint.shader = null
             }
             textPaint.alpha = 255
+        }
+
+        private fun activeWord(line: LyricLine): LyricWord? {
+            if (line.words.isNotEmpty()) return line.words.lastOrNull { playbackPosition >= it.start && playbackPosition < it.end }
+
+            val index = cachedLyricLines.indexOfFirst { it === line }
+            val nextTime = if (index >= 0 && index + 1 < cachedLyricLines.size) cachedLyricLines[index + 1].time else line.time + 5000L
+            val duration = (nextTime - line.time).coerceAtLeast(1200L)
+            val words = line.text.split(Regex("\\s+")).filter { it.isNotBlank() }
+            if (words.isEmpty()) return null
+            val total = words.sumOf { maxOf(1, it.length) }
+            var cursor = line.time
+            for (w in words) {
+                val slice = duration.toDouble() * maxOf(1, w.length) / total.toDouble()
+                val end = cursor + slice.toLong().coerceAtLeast(80L)
+                if (playbackPosition in cursor until end) return LyricWord(cursor, end, w, 0, 0)
+                cursor = end
+            }
+            return words.lastOrNull()?.let { LyricWord(cursor, cursor + 100L, it, 0, 0) }
+        }
+
+        private fun drawHighlightedWord(canvas: Canvas, line: String, word: LyricWord, centerX: Float, baseline: Float, size: Float, maxWidth: Float) {
+            val start = line.indexOf(word.text)
+            if (start < 0) return
+            textPaint.textSize = size
+            val prefix = line.substring(0, start)
+            val highlighted = line.substring(start, start + word.text.length)
+            val totalWidth = textPaint.measureText(line)
+            if (totalWidth > maxWidth) return
+            val left = centerX - totalWidth / 2f
+            val activeColor = parseColor(prefs.lyricsColor2, Color.WHITE)
+            textPaint.color = activeColor
+            textPaint.alpha = 255
+            textPaint.shader = null
+            canvas.drawText(highlighted, left + textPaint.measureText(prefix), baseline, textPaint)
         }
 
         private fun bassPaint(canvas: Canvas): Paint {

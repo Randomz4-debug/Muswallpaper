@@ -366,7 +366,11 @@ class MediaNotificationListenerService : NotificationListenerService() {
         }
 
         // Final LRCLIB request can return plain lyrics if no synchronized copy exists.
-        return fetchLyricsFromLrcLib(metadata, title, artist, syncedOnly = false).orEmpty()
+        fetchLyricsFromLrcLib(metadata, title, artist, syncedOnly = false)?.takeIf { it.isNotBlank() }?.let { return it }
+
+        // Independent plain-lyrics fallback. The live renderer will time plain lines
+        // smoothly when no timestamped source exists.
+        return fetchLyricsOvh(title, artist).orEmpty()
     }
 
     private fun translateIfNeeded(raw:String):String{
@@ -447,6 +451,28 @@ class MediaNotificationListenerService : NotificationListenerService() {
                 if (!syncedOnly) plainFallback else null
             } finally { connection.disconnect() }
         } catch (t: Throwable) { Log.d("MusWallLyrics", "LRCLIB search failed", t); null }
+    }
+
+    private fun fetchLyricsOvh(title: String, artist: String): String? {
+        return try {
+            val a = URLEncoder.encode(artist, "UTF-8")
+            val t = URLEncoder.encode(title, "UTF-8")
+            val connection = (URL("https://api.lyrics.ovh/v1/$a/$t").openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 3500
+                readTimeout = 5000
+                setRequestProperty("Accept", "application/json")
+                setRequestProperty("User-Agent", "MusWall/4.0")
+            }
+            try {
+                if (connection.responseCode !in 200..299) return null
+                JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+                    .optString("lyrics").trim().takeIf { it.isNotBlank() }
+            } finally { connection.disconnect() }
+        } catch (t: Throwable) {
+            Log.d("MusWallLyrics", "lyrics.ovh fallback failed", t)
+            null
+        }
     }
 
     private fun extractArtwork(metadata: MediaMetadata): Bitmap? {
