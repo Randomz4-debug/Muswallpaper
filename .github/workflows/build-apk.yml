@@ -28,9 +28,6 @@ jobs:
       - name: Apply POCO lock, restore and performance fixes
         run: python3 tools/fix_poco_lock_and_performance.py
 
-      - name: Apply Spotify-style lyric overlay
-        run: python3 tools/fix_spotify_lyrics_overlay.py
-
       - name: Apply black-screen restore fix
         run: python3 tools/fix_black_restore_and_live_setup.py
 
