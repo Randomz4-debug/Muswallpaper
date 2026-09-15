@@ -52,6 +52,7 @@ class MediaNotificationListenerService : NotificationListenerService() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val timelineHandler = Handler(Looper.getMainLooper())
+    private val stopHandler = Handler(Looper.getMainLooper())
     private val generation = AtomicLong(0L)
     private val timelineRunnable = object : Runnable {
         override fun run() {
@@ -62,9 +63,9 @@ class MediaNotificationListenerService : NotificationListenerService() {
             val updateTime = state?.lastPositionUpdateTime ?: 0L
             val elapsed = if (updateTime > 0L) (android.os.SystemClock.elapsedRealtime() - updateTime).coerceAtLeast(0L) else 0L
             val position = (basePosition + elapsed).coerceAtLeast(0L)
-            if (position - prefs.lyricsPosition >= 250L || updateTime == 0L) prefs.lyricsPosition = position
+            // Only send a lightweight checkpoint. The wallpaper interpolates locally.
             sendBroadcast(Intent(ACTION_LIVE_TICK).setPackage(packageName).putExtra(EXTRA_POSITION_MS, position))
-            timelineHandler.postDelayed(this, 250L)
+            timelineHandler.postDelayed(this, 1000L)
         }
     }
 
@@ -75,7 +76,18 @@ class MediaNotificationListenerService : NotificationListenerService() {
     private var activeController: MediaController? = null
     private var currentTrackId = ""
     private var playing = false
+    private var lastPlaybackState = PlaybackState.STATE_NONE
     private var generationJob: Job? = null
+    private val stableStopRunnable = Runnable {
+        val state = activeController?.playbackState?.state
+        if (!playing && state != PlaybackState.STATE_PLAYING) finalizePlaybackStop()
+    }
+    private val sessionPollRunnable = object : Runnable {
+        override fun run() {
+            refreshActiveSessions()
+            timelineHandler.postDelayed(this, 1200L)
+        }
+    }
     private var lyricsJob: Job? = null
 
     private val preferenceListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
@@ -169,6 +181,8 @@ class MediaNotificationListenerService : NotificationListenerService() {
             val component = ComponentName(this, MediaNotificationListenerService::class.java)
             sessionManager?.addOnActiveSessionsChangedListener(sessionsListener, component)
             refreshActiveSessions()
+            timelineHandler.removeCallbacks(sessionPollRunnable)
+            timelineHandler.post(sessionPollRunnable)
         } catch (t: Throwable) {
             Log.w("MusWallMedia", "Media session connection failed", t)
         }
@@ -217,8 +231,11 @@ class MediaNotificationListenerService : NotificationListenerService() {
     }
 
     private fun handlePlayback(state: PlaybackState?) {
-        val now = state?.state == PlaybackState.STATE_PLAYING
+        val stateCode = state?.state ?: PlaybackState.STATE_NONE
+        val now = stateCode == PlaybackState.STATE_PLAYING
         val was = playing
+        if (stateCode == lastPlaybackState && !(now && !was)) return
+        lastPlaybackState = stateCode
         playing = now
 
         if (state != null) prefs.lyricsPosition = state.position.coerceAtLeast(0L)
@@ -226,28 +243,33 @@ class MediaNotificationListenerService : NotificationListenerService() {
         broadcastPlaybackState(now)
 
         if (now) {
+            stopHandler.removeCallbacks(stableStopRunnable)
             timelineHandler.removeCallbacks(timelineRunnable)
             timelineHandler.post(timelineRunnable)
-            if (!was) activeController?.metadata?.let { handleMetadata(it, true) }
+            if (!was) {
+                // Some players do not emit metadata reliably when advancing to the next item.
+                currentTrackId = ""
+                activeController?.metadata?.let { handleMetadata(it, true) }
+            }
         } else {
             timelineHandler.removeCallbacks(timelineRunnable)
-            generation.incrementAndGet()
-            generationJob?.cancel()
-            lyricsJob?.cancel()
-            prefs.liveMusicPlaying = false
-            // WallpaperHelper.restoreOriginalLock() is suspend, so run it off the callback thread.
-            scope.launch {
-                try {
-                    wallpaperHelper.restoreOriginalLock()
-                } catch (t: Throwable) {
-                    Log.w("MusWallMedia", "Failed to restore original lock wallpaper", t)
-                }
-                sendBroadcast(Intent(ACTION_LIVE_TICK).setPackage(packageName).putExtra(EXTRA_POSITION_MS, prefs.lyricsPosition))
-                refreshLive()
-                broadcastWallpaperApplied("Music stopped • original wallpaper restored")
-            }
+            // Never call WallpaperManager for a temporary pause/buffer transition.
+            stopHandler.removeCallbacks(stableStopRunnable)
+            stopHandler.postDelayed(stableStopRunnable, 500L)
         }
         sendBroadcast(Intent(ACTION_WIDGET_CHANGED).setPackage(packageName))
+    }
+
+    private fun finalizePlaybackStop() {
+        generation.incrementAndGet()
+        generationJob?.cancel()
+        lyricsJob?.cancel()
+        prefs.liveMusicPlaying = false
+        // The live WallpaperService renders the saved original image itself.
+        sendBroadcast(Intent(ACTION_LIVE_TICK).setPackage(packageName).putExtra(EXTRA_POSITION_MS, prefs.lyricsPosition))
+        refreshLive()
+        sendBroadcast(Intent(ACTION_WIDGET_CHANGED).setPackage(packageName))
+        broadcastWallpaperApplied("Music stopped • original wallpaper restored")
     }
 
     private fun handleMetadata(metadata:MediaMetadata?,force:Boolean=false){
@@ -300,11 +322,6 @@ class MediaNotificationListenerService : NotificationListenerService() {
         sendBroadcast(Intent(ACTION_WIDGET_CHANGED).setPackage(packageName))
     }
 
-    private fun isOurLockLiveWallpaper(): Boolean = try {
-        if (android.os.Build.VERSION.SDK_INT < 34) false
-        else WallpaperManager.getInstance(this).getWallpaperInfo(WallpaperManager.FLAG_LOCK)?.component == ComponentName(this, MusicWallpaperService::class.java)
-    } catch (_: Throwable) { false }
-
     private suspend fun renderAndSendToLiveWallpaper(artwork: Bitmap, token: Long, lyrics: String) {
         if (token != generation.get() || !playing || !prefs.liveWallpaperEnabled) return
         val dm = resources.displayMetrics
@@ -315,7 +332,7 @@ class MediaNotificationListenerService : NotificationListenerService() {
         try {
             if (token != generation.get() || !playing || !prefs.liveWallpaperEnabled) return
             wallpaperHelper.saveCurrentForLiveWallpaper(result)
-            if (!isOurLockLiveWallpaper()) wallpaperHelper.applyLockFrame(result)
+            // Never replace the system wallpaper for a track. WallpaperService renders it.
             prefs.liveMusicPlaying = true
             refreshLive()
             broadcastWallpaperApplied(if (prefs.showLyrics && lyrics.isNotBlank()) "Live wallpaper + lyrics updated" else "Live wallpaper updated")

@@ -42,24 +42,48 @@ class MusicWallpaperService : WallpaperService() {
         private var cachedModified = Long.MIN_VALUE
         private var cachedBitmap: Bitmap? = null
         private var playbackPosition = prefs.lyricsPosition
+        private var playbackCheckpointElapsed = android.os.SystemClock.elapsedRealtime()
+        private var playbackCheckpointPosition = playbackPosition
         private val refreshRunnable = Runnable { drawWallpaper() }
+        private val animationRunnable = object : Runnable {
+            override fun run() {
+                if (!visible || !prefs.liveMusicPlaying) return
+                drawWallpaper()
+                val delay = when {
+                    prefs.bassEnabled -> 33L
+                    prefs.showLyrics -> 80L
+                    else -> 250L
+                }
+                drawHandler.postDelayed(this, delay)
+            }
+        }
         private val receiver = object : android.content.BroadcastReceiver() {
             override fun onReceive(context: android.content.Context?, intent: android.content.Intent?) {
                 when (intent?.action) {
                     ACTION_REFRESH -> requestDraw()
                     MediaNotificationListenerService.ACTION_LIVE_TICK -> {
-                        playbackPosition = intent.getLongExtra(MediaNotificationListenerService.EXTRA_POSITION_MS, playbackPosition).coerceAtLeast(0L)
-                        if (visible && (prefs.showLyrics || prefs.bassEnabled)) requestDraw()
+                        playbackCheckpointPosition = intent.getLongExtra(MediaNotificationListenerService.EXTRA_POSITION_MS, playbackPosition).coerceAtLeast(0L)
+                        playbackPosition = playbackCheckpointPosition
+                        playbackCheckpointElapsed = android.os.SystemClock.elapsedRealtime()
+                        requestDraw()
                     }
                 }
             }
         }
 
-        override fun onVisibilityChanged(isVisible: Boolean) { visible = isVisible; if (isVisible) requestDraw(true) }
+        override fun onVisibilityChanged(isVisible: Boolean) {
+            visible = isVisible
+            if (isVisible) requestDraw(true) else drawHandler.removeCallbacks(animationRunnable)
+        }
         override fun onSurfaceCreated(holder: SurfaceHolder) { super.onSurfaceCreated(holder); requestDraw(true) }
         override fun onSurfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) { super.onSurfaceChanged(holder, format, width, height); requestDraw(true) }
         override fun onSurfaceRedrawNeeded(holder: SurfaceHolder) { super.onSurfaceRedrawNeeded(holder); requestDraw(true) }
-        override fun onSurfaceDestroyed(holder: SurfaceHolder) { visible = false; drawHandler.removeCallbacks(refreshRunnable); super.onSurfaceDestroyed(holder) }
+        override fun onSurfaceDestroyed(holder: SurfaceHolder) {
+            visible = false
+            drawHandler.removeCallbacks(refreshRunnable)
+            drawHandler.removeCallbacks(animationRunnable)
+            super.onSurfaceDestroyed(holder)
+        }
 
         override fun onCreate(surfaceHolder: SurfaceHolder) {
             super.onCreate(surfaceHolder)
@@ -76,15 +100,18 @@ class MusicWallpaperService : WallpaperService() {
         private fun requestDraw(force: Boolean = false) {
             drawHandler.removeCallbacks(refreshRunnable)
             drawHandler.post(refreshRunnable)
-            if (visible && (prefs.bassEnabled || prefs.showLyrics)) {
-                drawHandler.postDelayed(refreshRunnable, if (prefs.bassEnabled) 50L else 80L)
+            drawHandler.removeCallbacks(animationRunnable)
+            if (visible && prefs.liveMusicPlaying && (prefs.bassEnabled || prefs.showLyrics)) {
+                drawHandler.post(animationRunnable)
             }
         }
 
         private fun sourceFile(): File? {
             if (!prefs.liveMusicPlaying) {
-                val original = File(applicationContext.filesDir, WallpaperHelper.FILE_ORIGINAL_LOCK)
-                if (original.exists()) return original
+                val originalLock = File(applicationContext.filesDir, WallpaperHelper.FILE_ORIGINAL_LOCK)
+                if (originalLock.exists()) return originalLock
+                val originalHome = File(applicationContext.filesDir, WallpaperHelper.FILE_ORIGINAL_HOME)
+                if (originalHome.exists()) return originalHome
                 return null
             }
             val current = File(applicationContext.filesDir, WallpaperHelper.FILE_CURRENT)
@@ -233,6 +260,12 @@ class MusicWallpaperService : WallpaperService() {
         }
 
         private fun drawWallpaper() {
+            if (prefs.liveMusicPlaying) {
+                val elapsed = (android.os.SystemClock.elapsedRealtime() - playbackCheckpointElapsed).coerceAtLeast(0L)
+                playbackPosition = playbackCheckpointPosition + elapsed
+            } else {
+                playbackPosition = prefs.lyricsPosition.coerceAtLeast(0L)
+            }
             val holder = surfaceHolder
             var canvas: Canvas? = null
             try {
@@ -258,6 +291,7 @@ class MusicWallpaperService : WallpaperService() {
         override fun onDestroy() {
             visible = false
             drawHandler.removeCallbacksAndMessages(null)
+            drawHandler.removeCallbacks(animationRunnable)
             if (receiverRegistered) try { applicationContext.unregisterReceiver(receiver) } catch (_: Throwable) {}
             receiverRegistered = false
             cachedBitmap?.let { if (!it.isRecycled) it.recycle() }

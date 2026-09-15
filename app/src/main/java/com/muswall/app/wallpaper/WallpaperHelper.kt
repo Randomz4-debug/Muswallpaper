@@ -108,10 +108,9 @@ class WallpaperHelper(private val context: Context) {
 
     suspend fun prepareOriginalBeforeLiveWallpaper(): Boolean = withContext(Dispatchers.IO) {
         try {
-            if (originalFile(WallpaperManager.FLAG_LOCK).exists()) return@withContext true
-            if (prefs.originalLockWallpaperUri.isNotBlank()) return@withContext true
+            backupOneIfMissingForPreparation(WallpaperManager.FLAG_SYSTEM)
             backupOneIfMissingForPreparation(WallpaperManager.FLAG_LOCK)
-            originalFile(WallpaperManager.FLAG_LOCK).exists()
+            originalFile(WallpaperManager.FLAG_LOCK).exists() || prefs.originalLockWallpaperUri.isNotBlank()
         } catch (_: Throwable) { false }
     }
 
