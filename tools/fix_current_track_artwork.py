@@ -134,5 +134,15 @@ replacement = '''    /**
 '''
 
 s = s[:start] + replacement + s[end:]
-MEDIA.write_text(s)
+# Normalize imports so repeated GitHub Actions runs remain idempotent.
+lines = MEDIA.read_text().splitlines()
+seen = set()
+normalized = []
+for line in lines:
+    if line.startswith("import "):
+        if line in seen:
+            continue
+        seen.add(line)
+    normalized.append(line)
+MEDIA.write_text("\\n".join(normalized) + "\\n")
 print('Current-track artwork selection patched: notification > track ART > display icon > album, with selectable source modes and fallbacks.')
