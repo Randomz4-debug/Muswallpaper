@@ -331,8 +331,8 @@ class MediaNotificationListenerService : NotificationListenerService() {
     private suspend fun renderAndSendToLiveWallpaper(artwork: Bitmap, token: Long, lyrics: String) {
         if (token != generation.get() || !playing || !prefs.liveWallpaperEnabled) return
         val dm = resources.displayMetrics
-        val targetW = (dm.widthPixels * .70f).toInt().coerceIn(480, 1080)
-        val targetH = (dm.heightPixels * .70f).toInt().coerceIn(900, 1920)
+        val targetW = dm.widthPixels.coerceAtLeast(480)
+        val targetH = dm.heightPixels.coerceAtLeast(900)
         wallpaperHelper.saveLastArtwork(artwork)
         val result = PythonBridge.generateWallpaper(artwork, targetW, targetH, prefs.blurRadius.toFloat(), prefs.darkness / 100f, prefs.artScale / 100f, 42, true, prefs.effect, prefs.blurType, prefs.coverHeight, prefs.coverOffset, prefs.transitionHeight, false, "", prefs.photoSource, "") ?: return
         try {
