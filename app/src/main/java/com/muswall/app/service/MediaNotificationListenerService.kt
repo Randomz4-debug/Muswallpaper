@@ -9,13 +9,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.drawable.Drawable
-import android.graphics.Canvas
-import android.graphics.drawable.Drawable
-import android.graphics.Canvas
-import android.graphics.drawable.Drawable
 import android.media.MediaMetadata
-import android.app.Notification
-import android.app.Notification
 import android.app.Notification
 import android.media.session.MediaController
 import android.media.session.MediaSessionManager
