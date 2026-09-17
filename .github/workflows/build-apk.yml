@@ -32,8 +32,9 @@ jobs:
         run: python3 tools/fix_black_restore_and_live_setup.py
 
       - name: Apply current-track music photo fix
-        run: python3 tools/fix_current_track_artwork.py
-\n      - name: Apply manual wallpaper quality and 4K/8K cache fix
+        run: python3 tools/fix_current_track_artwork.py tools/fix_manual_wallpaper_quality.py
+
+      - name: Apply manual wallpaper quality and 4K/8K cache fix
         run: python3 tools/fix_manual_wallpaper_quality.py
 
       - name: Commit source fixes
