@@ -217,4 +217,13 @@ if old not in s:
 s = s.replace(old, new)
 LIVE.write_text(s, encoding="utf-8")
 
+
+# ---------- Auto quality must use the actual display size ----------
+m = Path("app/src/main/java/com/muswall/app/service/MediaNotificationListenerService.kt").read_text(encoding="utf-8")
+m = m.replace(
+    'val targetW = (dm.widthPixels * .70f).toInt().coerceIn(480, 1080)\\n        val targetH = (dm.heightPixels * .70f).toInt().coerceIn(900, 1920)',
+    'val targetW = dm.widthPixels.coerceAtLeast(480)\\n        val targetH = dm.heightPixels.coerceAtLeast(900)'
+)
+Path("app/src/main/java/com/muswall/app/service/MediaNotificationListenerService.kt").write_text(m, encoding="utf-8")
+
 print("Added manual Original/Auto/4K/8K wallpaper quality, aspect-aware sizing, disk caching, background rendering compatibility, and memory-safe live decoding.")
