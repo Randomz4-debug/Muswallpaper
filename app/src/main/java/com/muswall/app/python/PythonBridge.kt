@@ -105,6 +105,7 @@ object PythonBridge {
             return null
         }
 
+        val prefs = PreferencesManager.getInstance(appContext)
         val (renderWidth, renderHeight) = resolveRenderSize(targetWidth, targetHeight, artwork.width, artwork.height)
         val pixels = renderWidth.toLong() * renderHeight.toLong()
         if (pixels > 45_000_000L) {
