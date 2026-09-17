@@ -1,1 +1,684 @@
-package com.muswall.app.service\n\nimport android.app.WallpaperManager\nimport android.content.ComponentName\nimport android.content.Context\nimport android.content.Intent\nimport android.content.SharedPreferences\nimport android.graphics.Bitmap\nimport android.graphics.BitmapFactory\nimport android.graphics.Canvas\nimport android.graphics.drawable.Drawable\nimport android.media.MediaMetadata\nimport android.app.Notification\nimport android.media.session.MediaController\nimport android.media.session.MediaSessionManager\nimport android.media.session.PlaybackState\nimport android.net.Uri\nimport android.os.Handler\nimport android.os.Looper\nimport android.service.notification.NotificationListenerService\nimport android.util.Log\nimport com.muswall.app.data.PreferencesManager\nimport com.muswall.app.python.PythonBridge\nimport com.muswall.app.wallpaper.MusicWallpaperService\nimport com.muswall.app.wallpaper.WallpaperHelper\nimport kotlinx.coroutines.CoroutineScope\nimport kotlinx.coroutines.Dispatchers\nimport kotlinx.coroutines.Job\nimport kotlinx.coroutines.SupervisorJob\nimport kotlinx.coroutines.cancel\nimport kotlinx.coroutines.launch\nimport org.json.JSONObject\nimport java.net.HttpURLConnection\nimport java.net.URL\nimport java.net.URLEncoder\nimport java.util.concurrent.atomic.AtomicLong\n\nclass MediaNotificationListenerService : NotificationListenerService() {\n    companion object {\n        const val ACTION_TRACK_CHANGED = "com.muswall.app.ACTION_TRACK_CHANGED"\n        const val ACTION_PLAYBACK_STATE_CHANGED = "com.muswall.app.ACTION_PLAYBACK_STATE_CHANGED"\n        const val ACTION_WALLPAPER_APPLIED = "com.muswall.app.ACTION_WALLPAPER_APPLIED"\n        const val ACTION_LIVE_TICK = "com.muswall.app.ACTION_LIVE_TICK"\n        const val ACTION_SETTINGS_CHANGED = "com.muswall.app.ACTION_SETTINGS_CHANGED"\n        const val ACTION_WIDGET_PLAY_PAUSE = "com.muswall.app.ACTION_WIDGET_PLAY_PAUSE"\n        const val ACTION_WIDGET_NEXT = "com.muswall.app.ACTION_WIDGET_NEXT"\n        const val ACTION_WIDGET_PREV = "com.muswall.app.ACTION_WIDGET_PREV"\n        const val ACTION_WIDGET_CHANGED = "com.muswall.app.ACTION_WIDGET_CHANGED"\n        const val EXTRA_TRACK_TITLE = "extra_track_title"\n        const val EXTRA_ARTIST = "extra_artist"\n        const val EXTRA_IS_PLAYING = "extra_is_playing"\n        const val EXTRA_STATUS_MESSAGE = "extra_status_message"\n        const val EXTRA_POSITION_MS = "extra_position_ms"\n    }\n\n    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)\n    private val timelineHandler = Handler(Looper.getMainLooper())\n    private val stopHandler = Handler(Looper.getMainLooper())\n    private val generation = AtomicLong(0L)\n    private val timelineRunnable = object : Runnable {\n        override fun run() {\n            if (!playing) return\n            val controller = activeController\n            val state = controller?.playbackState\n            val basePosition = state?.position?.coerceAtLeast(0L) ?: prefs.lyricsPosition\n            val updateTime = state?.lastPositionUpdateTime ?: 0L\n            val elapsed = if (updateTime > 0L) (android.os.SystemClock.elapsedRealtime() - updateTime).coerceAtLeast(0L) else 0L\n            val position = (basePosition + elapsed).coerceAtLeast(0L)\n            val jumped = lastObservedPosition >= 0L && kotlin.math.abs(position - lastObservedPosition) > 750L\n            lastObservedPosition = position\n            if (jumped) prefs.lyricsPosition = position\n            sendBroadcast(Intent(ACTION_LIVE_TICK).setPackage(packageName).putExtra(EXTRA_POSITION_MS, position))\n            timelineHandler.postDelayed(this, 1000L)\n        }\n    }\n\n    private lateinit var prefs: PreferencesManager\n    private lateinit var sharedPrefs: SharedPreferences\n    private lateinit var wallpaperHelper: WallpaperHelper\n    private var sessionManager: MediaSessionManager? = null\n    private var activeController: MediaController? = null\n    private var currentTrackId = ""\n    private var playing = false\n    private var lastPlaybackState = PlaybackState.STATE_NONE\n    private var lastObservedPosition = -1L\n    private var generationJob: Job? = null\n    private val stableStopRunnable = Runnable {\n        val state = activeController?.playbackState?.state\n        if (!playing && state != PlaybackState.STATE_PLAYING) finalizePlaybackStop()\n    }\n    private val sessionPollRunnable = object : Runnable {\n        override fun run() {\n            refreshActiveSessions()\n            timelineHandler.postDelayed(this, 1200L)\n        }\n    }\n    private var lyricsJob: Job? = null\n\n    private val preferenceListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->\n        when (key) {\n            "show_lyrics", "lyrics_language" -> {\n                if (playing) activeController?.metadata?.let { handleMetadata(it, true) }\n                refreshLive()\n            }\n            "lyrics_x", "lyrics_y", "lyrics_width", "lyrics_size", "lyrics_lines",\n            "lyrics_color", "lyrics_color2", "lyrics_color3", "lyrics_color_mode", "lyrics_shadow",\n            "bass_enabled", "bass_x", "bass_y", "bass_width", "bass_height", "bass_sensitivity",\n            "bass_color", "bass_color2", "bass_color3", "bass_color_mode" -> refreshLive()\n            "widget_opacity", "widget_show_artwork", "widget_show_title", "widget_show_artist",\n            "widget_show_controls", "widget_show_progress", "widget_show_custom_text", "widget_custom_text",\n            "widget_empty_title", "widget_text_color", "widget_secondary_color", "widget_background_color",\n            "widget_title_size", "widget_artist_size", "widget_custom_text_size", "widget_show_time",\n            "widget_time_label", "widget_corner_radius", "widget_padding", "widget_artwork_size",\n            "widget_layout", "widget_style" -> sendBroadcast(Intent(ACTION_WIDGET_CHANGED).setPackage(packageName))\n        }\n    }\n\n    private val widgetControlReceiver = object : android.content.BroadcastReceiver() {\n        override fun onReceive(context: Context?, intent: Intent?) {\n            val controls = activeController?.transportControls ?: return\n            when (intent?.action) {\n                ACTION_WIDGET_PLAY_PAUSE -> if (playing) controls.pause() else controls.play()\n                ACTION_WIDGET_NEXT -> controls.skipToNext()\n                ACTION_WIDGET_PREV -> controls.skipToPrevious()\n            }\n        }\n    }\n\n    private val settingsReceiver = object : android.content.BroadcastReceiver() {\n        override fun onReceive(context: Context?, intent: Intent?) {\n            if (intent?.action != ACTION_SETTINGS_CHANGED) return\n            currentTrackId = ""\n            activeController?.metadata?.let { handleMetadata(it, true) }\n            refreshLive()\n            sendBroadcast(Intent(ACTION_WIDGET_CHANGED).setPackage(packageName))\n        }\n    }\n\n    private val callback = object : MediaController.Callback() {\n        override fun onPlaybackStateChanged(state: PlaybackState?) = handlePlayback(state)\n        override fun onMetadataChanged(metadata: MediaMetadata?) = handleMetadata(metadata, true)\n        override fun onSessionDestroyed() {\n            handlePlayback(null)\n            refreshActiveSessions()\n        }\n    }\n\n    private val sessionsListener = MediaSessionManager.OnActiveSessionsChangedListener { controllers ->\n        selectBestController(controllers)\n    }\n\n    override fun onCreate() {\n        super.onCreate()\n        prefs = PreferencesManager.getInstance(this)\n        sharedPrefs = getSharedPreferences("muswall", Context.MODE_PRIVATE)\n        sharedPrefs.registerOnSharedPreferenceChangeListener(preferenceListener)\n        wallpaperHelper = WallpaperHelper(this)\n        PythonBridge.initialize(this)\n\n        val widgetFilter = android.content.IntentFilter().apply {\n            addAction(ACTION_WIDGET_PLAY_PAUSE)\n            addAction(ACTION_WIDGET_NEXT)\n            addAction(ACTION_WIDGET_PREV)\n        }\n        val settingsFilter = android.content.IntentFilter(ACTION_SETTINGS_CHANGED)\n        try {\n            if (android.os.Build.VERSION.SDK_INT >= 33) {\n                registerReceiver(widgetControlReceiver, widgetFilter, Context.RECEIVER_NOT_EXPORTED)\n                registerReceiver(settingsReceiver, settingsFilter, Context.RECEIVER_NOT_EXPORTED)\n            } else {\n                @Suppress("DEPRECATION") registerReceiver(widgetControlReceiver, widgetFilter)\n                @Suppress("DEPRECATION") registerReceiver(settingsReceiver, settingsFilter)\n            }\n        } catch (t: Throwable) {\n            Log.w("MusWallMedia", "Receiver registration failed", t)\n        }\n    }\n\n    override fun onListenerConnected() {\n        super.onListenerConnected()\n        connectSessions()\n    }\n\n    private fun connectSessions() {\n        try {\n            sessionManager = getSystemService(Context.MEDIA_SESSION_SERVICE) as MediaSessionManager\n            val component = ComponentName(this, MediaNotificationListenerService::class.java)\n            sessionManager?.addOnActiveSessionsChangedListener(sessionsListener, component)\n            refreshActiveSessions()\n            timelineHandler.removeCallbacks(sessionPollRunnable)\n            timelineHandler.post(sessionPollRunnable)\n        } catch (t: Throwable) {\n            Log.w("MusWallMedia", "Media session connection failed", t)\n        }\n    }\n\n    private fun refreshActiveSessions() {\n        try {\n            selectBestController(sessionManager?.getActiveSessions(ComponentName(this, MediaNotificationListenerService::class.java)))\n        } catch (t: Throwable) {\n            Log.w("MusWallMedia", "Active session refresh failed", t)\n        }\n    }\n\n    private fun selectBestController(controllers: List<MediaController>?) {\n        val list = controllers.orEmpty()\n        switchController(\n            list.firstOrNull { it.playbackState?.state == PlaybackState.STATE_PLAYING }\n                ?: list.firstOrNull { it.metadata != null }\n                ?: list.firstOrNull()\n        )\n    }\n\n    private fun switchController(controller: MediaController?) {\n        if (controller?.sessionToken == activeController?.sessionToken) {\n            controller?.playbackState?.let { handlePlayback(it) }\n            controller?.metadata?.let { handleMetadata(it, false) }\n            if (controller == null) handlePlayback(null)\n            return\n        }\n\n        try { activeController?.unregisterCallback(callback) } catch (_: Throwable) {}\n        activeController = controller\n        currentTrackId = ""\n\n        if (controller == null) {\n            handlePlayback(null)\n            broadcastTrack(prefs.lastTrackTitle.ifBlank { "No music detected" }, prefs.lastArtist.ifBlank { "Last played" })\n            return\n        }\n\n        try { controller.registerCallback(callback) } catch (t: Throwable) {\n            Log.w("MusWallMedia", "Controller callback registration failed", t)\n        }\n        handlePlayback(controller.playbackState)\n        controller.metadata?.let { handleMetadata(it, true) }\n    }\n\n    private fun handlePlayback(state: PlaybackState?) {\n        val stateCode = state?.state ?: PlaybackState.STATE_NONE\n        val now = stateCode == PlaybackState.STATE_PLAYING\n        val was = playing\n        if (stateCode == lastPlaybackState && !(now && !was)) return\n        lastPlaybackState = stateCode\n        playing = now\n\n        if (state != null) prefs.lyricsPosition = state.position.coerceAtLeast(0L)\n        prefs.lastPlaybackState = if (now) "playing" else "paused"\n        broadcastPlaybackState(now)\n\n        if (now) {\n            stopHandler.removeCallbacks(stableStopRunnable)\n            timelineHandler.removeCallbacks(timelineRunnable)\n            timelineHandler.post(timelineRunnable)\n            if (!was) {\n                // Some players do not emit metadata reliably when advancing to the next item.\n                currentTrackId = ""\n                activeController?.metadata?.let { handleMetadata(it, true) }\n            }\n        } else {\n            timelineHandler.removeCallbacks(timelineRunnable)\n            // Never call WallpaperManager for a temporary pause/buffer transition.\n            stopHandler.removeCallbacks(stableStopRunnable)\n            stopHandler.postDelayed(stableStopRunnable, 500L)\n        }\n        sendBroadcast(Intent(ACTION_WIDGET_CHANGED).setPackage(packageName))\n    }\n\n    private fun finalizePlaybackStop() {\n        generation.incrementAndGet()\n        generationJob?.cancel()\n        lyricsJob?.cancel()\n        prefs.liveMusicPlaying = false\n        // The live WallpaperService renders the saved original image itself.\n        sendBroadcast(Intent(ACTION_LIVE_TICK).setPackage(packageName).putExtra(EXTRA_POSITION_MS, prefs.lyricsPosition))\n        refreshLive()\n        sendBroadcast(Intent(ACTION_WIDGET_CHANGED).setPackage(packageName))\n        broadcastWallpaperApplied("Music stopped • original wallpaper restored")\n    }\n\n    private fun handleMetadata(metadata:MediaMetadata?,force:Boolean=false){\n        if(metadata==null)return\n        val title=metadata.getString(MediaMetadata.METADATA_KEY_TITLE)?.trim().orEmpty().ifEmpty{"Unknown title"}\n        val artist=metadata.getString(MediaMetadata.METADATA_KEY_ARTIST)?.trim().orEmpty().ifEmpty{"Unknown artist"}\n        prefs.lastTrackTitle=title\n        prefs.lastArtist=artist\n        prefs.lastDuration=metadata.getLong(MediaMetadata.METADATA_KEY_DURATION).coerceAtLeast(0L)\n        broadcastTrack(title,artist)\n        val artUri=metadata.getString(MediaMetadata.METADATA_KEY_ALBUM_ART_URI)?:metadata.getString(MediaMetadata.METADATA_KEY_ART_URI).orEmpty()\n        val mediaId=metadata.getString(MediaMetadata.METADATA_KEY_MEDIA_ID).orEmpty()\n        val id=mediaId+"|"+title+"|"+artist+"|"+artUri\n        if(!force&&id==currentTrackId)return\n        currentTrackId=id\n        prefs.lyricsPosition=activeController?.playbackState?.position?.coerceAtLeast(0L)?:prefs.lyricsPosition\n        if(!prefs.isAutoEnabled||!playing||prefs.wallpaperMode!=PreferencesManager.MODE_MUSIC)return\n        if(!prefs.liveWallpaperEnabled){broadcastWallpaperApplied("Music detected • enable MusWall Live Wallpaper once");return}\n        scope.launch(Dispatchers.IO) { wallpaperHelper.prepareOriginalBeforeLiveWallpaper() }\n        val token=generation.incrementAndGet()\n        generationJob?.cancel()\n        generationJob=scope.launch(Dispatchers.Default){\n            val art=extractArtwork(metadata)\n            try{\n                val immediate=findImmediateLyrics(metadata)\n                if(prefs.showLyrics){prefs.lastLyrics=immediate?:"[00:00.00] Loading lyrics…";refreshLive()}\n                if(art!=null)renderAndSendToLiveWallpaper(art,token,prefs.lastLyrics)else refreshLive()\n                if(prefs.showLyrics){\n                    val resolved=if(immediate!=null)immediate else resolveLyrics(metadata,title,artist)\n                    if(token==generation.get()&&playing){\n                        if(resolved.isNotBlank())prefs.lastLyrics=translateIfNeeded(resolved)\n                        else if(prefs.lastLyrics.contains("Loading lyrics"))prefs.lastLyrics="Lyrics unavailable for this track"\n                        refreshLive()\n                    }\n                }\n            }finally{art?.let{if(!it.isRecycled)it.recycle()}}\n        }\n    }\n    private fun findImmediateLyrics(metadata:MediaMetadata):String?{\n        val direct=metadata.getString("android.media.metadata.LYRICS")?.trim().orEmpty()\n        if(hasLrcTimestamps(direct))return direct\n        for(key in metadata.keySet()){\n            val value=metadata.getString(key)?.trim().orEmpty()\n            if(key.contains("lyric",true)&&hasLrcTimestamps(value))return value\n        }\n        return null\n    }\n    private fun refreshLive() {\n        sendBroadcast(Intent(MusicWallpaperService.ACTION_REFRESH).setPackage(packageName))\n        sendBroadcast(Intent(ACTION_WIDGET_CHANGED).setPackage(packageName))\n    }\n\n    private suspend fun renderAndSendToLiveWallpaper(artwork: Bitmap, token: Long, lyrics: String) {\n        if (token != generation.get() || !playing || !prefs.liveWallpaperEnabled) return\n        val dm = resources.displayMetrics\n        val targetW = dm.widthPixels.coerceAtLeast(480)\n        val targetH = dm.heightPixels.coerceAtLeast(900)\n        wallpaperHelper.saveLastArtwork(artwork)\n        val result = PythonBridge.generateWallpaper(artwork, targetW, targetH, prefs.blurRadius.toFloat(), prefs.darkness / 100f, prefs.artScale / 100f, 42, true, prefs.effect, prefs.blurType, prefs.coverHeight, prefs.coverOffset, prefs.transitionHeight, false, "", prefs.photoSource, "") ?: return\n        try {\n            if (token != generation.get() || !playing || !prefs.liveWallpaperEnabled) return\n            wallpaperHelper.saveCurrentForLiveWallpaper(result)\n            // Never replace the system wallpaper for a track. WallpaperService renders it.\n            prefs.liveMusicPlaying = true\n            refreshLive()\n            broadcastWallpaperApplied(if (prefs.showLyrics && lyrics.isNotBlank()) "Live wallpaper + lyrics updated" else "Live wallpaper updated")\n        } finally {\n            if (!result.isRecycled) result.recycle()\n        }\n    }\n\n    private fun hasLrcTimestamps(text: String): Boolean = Regex("\\[\\d{1,3}:\\d{2}(?:[.:]\\d{1,3})?\\]").containsMatchIn(text)\n\n    private fun resolveLyrics(metadata: MediaMetadata, title: String, artist: String): String {\n        // Always prefer timestamped lyrics so the overlay can follow the exact playback position.\n        val direct = metadata.getString("android.media.metadata.LYRICS")?.trim().orEmpty()\n        if (hasLrcTimestamps(direct)) return direct\n        for (key in metadata.keySet()) {\n            if (!key.contains("lyric", ignoreCase = true)) continue\n            val value = metadata.getString(key)?.trim().orEmpty()\n            if (hasLrcTimestamps(value)) return value\n        }\n\n        // LRCLIB: exact match first, then search. Both attempts prefer syncedLyrics.\n        fetchLyricsFromLrcLib(metadata, title, artist, syncedOnly = true)?.takeIf { it.isNotBlank() }?.let { return it }\n\n        // Some players expose plain lyrics directly. Keep them as a last-resort fallback rather than\n        // returning them before the synced LRCLIB lookup.\n        if (direct.isNotBlank()) return direct\n        for (key in metadata.keySet()) {\n            if (!key.contains("lyric", ignoreCase = true)) continue\n            val value = metadata.getString(key)?.trim().orEmpty()\n            if (value.isNotBlank()) return value\n        }\n\n        // Final LRCLIB request can return plain lyrics if no synchronized copy exists.\n        fetchLyricsFromLrcLib(metadata, title, artist, syncedOnly = false)?.takeIf { it.isNotBlank() }?.let { return it }\n\n        // Independent plain-lyrics fallback. The live renderer will time plain lines\n        // smoothly when no timestamped source exists.\n        return fetchLyricsOvh(title, artist).orEmpty()\n    }\n\n    private fun translateIfNeeded(raw:String):String{\n        val lang=prefs.lyricsLanguage.trim().lowercase()\n        if(lang.isBlank()||lang=="original"||lang=="auto")return raw\n        return try{\n            val lines=raw.replace("\r","").split('\n')\n            val out=ArrayList<String>()\n            var i=0\n            while(i<lines.size){\n                val chunkLines=ArrayList<String>()\n                var chars=0\n                while(i<lines.size&&chars+lines[i].length<420){chunkLines+=lines[i];chars+=lines[i].length+1;i++}\n                val prefixes=chunkLines.map{Regex("^(\\s*\\[[^]]+\\]\\s*)").find(it)?.value?:""}\n                val texts=chunkLines.mapIndexed{idx,line->line.removePrefix(prefixes[idx])}\n                val translated=translateChunk(texts.joinToString("\n"),lang).split('\n')\n                if(translated.size==texts.size)chunkLines.forEachIndexed{idx,_->out+=prefixes[idx]+translated[idx]}else out+=chunkLines\n            }\n            out.joinToString("\n")\n        }catch(_:Throwable){raw}\n    }\n    private fun translateChunk(chunk:String,language:String):String{\n        return try{\n            val q=URLEncoder.encode(chunk,"UTF-8")\n            val target=URLEncoder.encode(language,"UTF-8")\n            val url=URL("https://api.mymemory.translated.net/get?q="+q+"&langpair=auto%7C"+target)\n            val c=url.openConnection() as HttpURLConnection\n            c.requestMethod="GET";c.connectTimeout=4000;c.readTimeout=5000;c.setRequestProperty("User-Agent","MusWall/4.0")\n            try{\n                if(c.responseCode !in 200..299)return chunk\n                JSONObject(c.inputStream.bufferedReader().use{it.readText()}).optJSONObject("responseData")?.optString("translatedText")?.takeIf{it.isNotBlank()}?:chunk\n            }finally{c.disconnect()}\n        }catch(_:Throwable){chunk}\n    }\n    private fun fetchLyricsFromLrcLib(metadata: MediaMetadata, title: String, artist: String, syncedOnly: Boolean): String? {\n        if (title.isBlank() || artist.isBlank()) return null\n        val duration = metadata.getLong(MediaMetadata.METADATA_KEY_DURATION).coerceAtLeast(0L)\n        val exact = tryLrcLibGet(metadata, title, artist, duration, syncedOnly)\n        if (!exact.isNullOrBlank()) return exact\n        return tryLrcLibSearch(title, artist, syncedOnly)\n    }\n\n    private fun tryLrcLibGet(metadata: MediaMetadata, title: String, artist: String, duration: Long, syncedOnly: Boolean): String? {\n        return try {\n            val builder = Uri.Builder().scheme("https").authority("lrclib.net").appendPath("api").appendPath("get").appendQueryParameter("track_name", title).appendQueryParameter("artist_name", artist)\n            metadata.getString(MediaMetadata.METADATA_KEY_ALBUM)?.trim()?.takeIf { it.isNotBlank() }?.let { builder.appendQueryParameter("album_name", it) }\n            if (duration > 0) builder.appendQueryParameter("duration", (duration / 1000L).toString())\n            val connection = (URL(builder.build().toString()).openConnection() as HttpURLConnection).apply {\n                requestMethod = "GET"; connectTimeout = 3500; readTimeout = 5000; setRequestProperty("Accept", "application/json"); setRequestProperty("User-Agent", "MusWall/4.0")\n            }\n            try {\n                if (connection.responseCode !in 200..299) return null\n                val root = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })\n                if (syncedOnly) root.optString("syncedLyrics").trim().takeIf { it.isNotBlank() }\n                else root.optString("syncedLyrics").trim().takeIf { it.isNotBlank() } ?: root.optString("plainLyrics").trim().takeIf { it.isNotBlank() }\n            } finally { connection.disconnect() }\n        } catch (t: Throwable) { Log.d("MusWallLyrics", "LRCLIB exact lookup failed", t); null }\n    }\n\n    private fun tryLrcLibSearch(title: String, artist: String, syncedOnly: Boolean): String? {\n        return try {\n            val query = URLEncoder.encode("$title $artist", "UTF-8")\n            val url = URL("https://lrclib.net/api/search?q=$query")\n            val connection = (url.openConnection() as HttpURLConnection).apply {\n                requestMethod = "GET"; connectTimeout = 3500; readTimeout = 6000; setRequestProperty("Accept", "application/json"); setRequestProperty("User-Agent", "MusWall/4.0")\n            }\n            try {\n                if (connection.responseCode !in 200..299) return null\n                val array = org.json.JSONArray(connection.inputStream.bufferedReader().use { it.readText() })\n                var plainFallback: String? = null\n                for (i in 0 until array.length()) {\n                    val item = array.optJSONObject(i) ?: continue\n                    val synced = item.optString("syncedLyrics").trim()\n                    val plain = item.optString("plainLyrics").trim()\n                    if (synced.isNotBlank()) return synced\n                    if (plainFallback == null && plain.isNotBlank()) plainFallback = plain\n                }\n                if (!syncedOnly) plainFallback else null\n            } finally { connection.disconnect() }\n        } catch (t: Throwable) { Log.d("MusWallLyrics", "LRCLIB search failed", t); null }\n    }\n\n    private fun fetchLyricsOvh(title: String, artist: String): String? {\n        return try {\n            val a = URLEncoder.encode(artist, "UTF-8")\n            val t = URLEncoder.encode(title, "UTF-8")\n            val connection = (URL("https://api.lyrics.ovh/v1/$a/$t").openConnection() as HttpURLConnection).apply {\n                requestMethod = "GET"\n                connectTimeout = 3500\n                readTimeout = 5000\n                setRequestProperty("Accept", "application/json")\n                setRequestProperty("User-Agent", "MusWall/4.0")\n            }\n            try {\n                if (connection.responseCode !in 200..299) return null\n                JSONObject(connection.inputStream.bufferedReader().use { it.readText() })\n                    .optString("lyrics").trim().takeIf { it.isNotBlank() }\n            } finally { connection.disconnect() }\n        } catch (t: Throwable) {\n            Log.d("MusWallLyrics", "lyrics.ovh fallback failed", t)\n            null\n        }\n    }\n\n    /**\n     * Resolve the artwork for the TRACK that is playing, not merely the album/playlist.\n     *\n     * Automatic priority:\n     *   1. Current media notification artwork (usually the exact Now Playing image)\n     *   2. METADATA_KEY_ART / ART_URI\n     *   3. Display icon\n     *   4. Album artwork as the final fallback\n     *\n     * The Settings > Music photo source selector can force any of these sources.\n     */\n    /**\n     * Resolve the artwork for the TRACK that is playing, not merely the album/playlist.\n     *\n     * Automatic priority:\n     *   1. Current media notification artwork (usually the exact Now Playing image)\n     *   2. METADATA_KEY_ART / ART_URI\n     *   3. Display icon\n     *   4. Album artwork as the final fallback\n     *\n     * The Settings > Music photo source selector can force any of these sources.\n     */\n    /**\n     * Resolve the artwork for the TRACK that is playing, not merely the album/playlist.\n     *\n     * Automatic priority:\n     *   1. Current media notification artwork (usually the exact Now Playing image)\n     *   2. METADATA_KEY_ART / ART_URI\n     *   3. Display icon\n     *   4. Album artwork as the final fallback\n     *\n     * The Settings > Music photo source selector can force any of these sources.\n     */\n    /**\n     * Resolve the artwork for the TRACK that is playing, not merely the album/playlist.\n     *\n     * Automatic priority:\n     *   1. Current media notification artwork (usually the exact Now Playing image)\n     *   2. METADATA_KEY_ART / ART_URI\n     *   3. Display icon\n     *   4. Album artwork as the final fallback\n     *\n     * The Settings > Music photo source selector can force any of these sources.\n     */\n    /**\n     * Resolve the artwork for the TRACK that is playing, not merely the album/playlist.\n     *\n     * Automatic priority:\n     *   1. Current media notification artwork (usually the exact Now Playing image)\n     *   2. METADATA_KEY_ART / ART_URI\n     *   3. Display icon\n     *   4. Album artwork as the final fallback\n     *\n     * The Settings > Music photo source selector can force any of these sources.\n     */\n    /**\n     * Resolve the artwork for the TRACK that is playing, not merely the album/playlist.\n     *\n     * Automatic priority:\n     *   1. Current media notification artwork (usually the exact Now Playing image)\n     *   2. METADATA_KEY_ART / ART_URI\n     *   3. Display icon\n     *   4. Album artwork as the final fallback\n     *\n     * The Settings > Music photo source selector can force any of these sources.\n     */\n    /**\n     * Resolve the artwork for the TRACK that is playing, not merely the album/playlist.\n     *\n     * Automatic priority:\n     *   1. Current media notification artwork (usually the exact Now Playing image)\n     *   2. METADATA_KEY_ART / ART_URI\n     *   3. Display icon\n     *   4. Album artwork as the final fallback\n     *\n     * The Settings > Music photo source selector can force any of these sources.\n     */\n    private fun extractArtwork(metadata: MediaMetadata): Bitmap? {\n        return try {\n            val source = prefs.photoSource\n            val primary = when (source) {\n                PreferencesManager.PHOTO_NOTIFICATION -> notificationArtwork(metadata)\n                PreferencesManager.PHOTO_ART -> metadataArt(metadata)\n                PreferencesManager.PHOTO_DISPLAY_ICON -> displayIconArtwork(metadata)\n                PreferencesManager.PHOTO_ALBUM -> albumArtwork(metadata)\n                PreferencesManager.PHOTO_CUSTOM -> customPhotoArtwork()\n                else -> notificationArtwork(metadata)\n                    ?: metadataArt(metadata)\n                    ?: displayIconArtwork(metadata)\n                    ?: albumArtwork(metadata)\n            }\n\n            if (primary != null) return primary\n            if (!prefs.photoFallback) return null\n\n            // If the selected source is unavailable, never leave the wallpaper blank.\n            when (source) {\n                PreferencesManager.PHOTO_NOTIFICATION -> metadataArt(metadata) ?: albumArtwork(metadata)\n                PreferencesManager.PHOTO_ART -> notificationArtwork(metadata) ?: albumArtwork(metadata)\n                PreferencesManager.PHOTO_DISPLAY_ICON -> notificationArtwork(metadata) ?: metadataArt(metadata) ?: albumArtwork(metadata)\n                PreferencesManager.PHOTO_ALBUM -> notificationArtwork(metadata) ?: metadataArt(metadata)\n                PreferencesManager.PHOTO_CUSTOM -> notificationArtwork(metadata) ?: metadataArt(metadata) ?: albumArtwork(metadata)\n                else -> null\n            }\n        } catch (t: Throwable) {\n            Log.w("MusWallMedia", "Artwork extraction failed", t)\n            null\n        }\n    }\n\n    private fun metadataArt(metadata: MediaMetadata): Bitmap? {\n        metadata.getBitmap(MediaMetadata.METADATA_KEY_ART)?.let { return downsampleArtwork(it) }\n        val uri = metadata.getString(MediaMetadata.METADATA_KEY_ART_URI).orEmpty()\n        return bitmapFromUri(uri)\n    }\n\n    private fun albumArtwork(metadata: MediaMetadata): Bitmap? {\n        metadata.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART)?.let { return downsampleArtwork(it) }\n        val uri = metadata.getString(MediaMetadata.METADATA_KEY_ALBUM_ART_URI).orEmpty()\n        return bitmapFromUri(uri)\n    }\n\n    private fun displayIconArtwork(metadata: MediaMetadata): Bitmap? {\n        metadata.getBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON)?.let { return downsampleArtwork(it) }\n        val uri = metadata.getString(MediaMetadata.METADATA_KEY_DISPLAY_ICON_URI).orEmpty()\n        return bitmapFromUri(uri)\n    }\n\n    /** Prefer the media notification's large icon because many players put their actual\n     * current-track artwork here even when MediaMetadata exposes album/playlist art. */\n    private fun notificationArtwork(metadata: MediaMetadata): Bitmap? {\n        val packageName = activeController?.packageName ?: return null\n        val title = metadata.getString(MediaMetadata.METADATA_KEY_TITLE)?.trim().orEmpty()\n        val artist = metadata.getString(MediaMetadata.METADATA_KEY_ARTIST)?.trim().orEmpty()\n        val notifications = activeNotifications.orEmpty().filter { it.packageName == packageName }\n\n        val matching = notifications.firstOrNull { sbn ->\n            val extras = sbn.notification.extras\n            val nTitle = extras?.getCharSequence(Notification.EXTRA_TITLE)?.toString()?.trim().orEmpty()\n            val nText = extras?.getCharSequence(Notification.EXTRA_TEXT)?.toString()?.trim().orEmpty()\n            (title.isNotBlank() && nTitle.equals(title, ignoreCase = true)) ||\n                (title.isNotBlank() && nText.contains(title, ignoreCase = true)) ||\n                (artist.isNotBlank() && nText.contains(artist, ignoreCase = true))\n        }\n        val transport = notifications.firstOrNull { it.notification.category == Notification.CATEGORY_TRANSPORT }\n        val candidates = listOfNotNull(matching, transport) + notifications\n\n        for (sbn in candidates.distinctBy { it.key }) {\n            val icon = runCatching { sbn.notification.getLargeIcon() }.getOrNull() ?: continue\n            val drawable = runCatching { icon.loadDrawable(this) }.getOrNull() ?: continue\n            val bitmap = drawableToBitmap(drawable) ?: continue\n            return downsampleArtwork(bitmap)\n        }\n        return null\n    }\n\n    private fun customPhotoArtwork(): Bitmap? {\n        val uriText = prefs.customPhotoUri.trim()\n        return if (uriText.isBlank()) null else bitmapFromUri(uriText)\n    }\n\n    private fun bitmapFromUri(uriText: String): Bitmap? {\n        if (uriText.isBlank()) return null\n        return runCatching {\n            contentResolver.openInputStream(Uri.parse(uriText)).use { input ->\n                if (input == null) null else BitmapFactory.decodeStream(input)?.let { downsampleArtwork(it) }\n            }\n        }.getOrNull()\n    }\n\n    private fun drawableToBitmap(drawable: Drawable): Bitmap? {\n        val width = drawable.intrinsicWidth.takeIf { it > 0 } ?: 512\n        val height = drawable.intrinsicHeight.takeIf { it > 0 } ?: 512\n        val bitmap = Bitmap.createBitmap(width.coerceAtMost(2048), height.coerceAtMost(2048), Bitmap.Config.ARGB_8888)\n        Canvas(bitmap).also { canvas ->\n            drawable.setBounds(0, 0, canvas.width, canvas.height)\n            drawable.draw(canvas)\n        }\n        return bitmap\n    }\n\n    private fun downsampleArtwork(bitmap: Bitmap): Bitmap? {\n        return try {\n            val max = 1600\n            val scale = minOf(1f, max.toFloat() / maxOf(bitmap.width, bitmap.height))\n            if (scale >= 0.999f) bitmap else Bitmap.createScaledBitmap(bitmap, (bitmap.width * scale).toInt().coerceAtLeast(1), (bitmap.height * scale).toInt().coerceAtLeast(1), true)\n        } catch (_: Throwable) { bitmap }\n    }\n\n    private fun broadcastTrack(title: String, artist: String) {\n        sendBroadcast(Intent(ACTION_TRACK_CHANGED).setPackage(packageName).putExtra(EXTRA_TRACK_TITLE, title).putExtra(EXTRA_ARTIST, artist))\n    }\n\n    private fun broadcastPlaybackState(isPlaying: Boolean) {\n        sendBroadcast(Intent(ACTION_PLAYBACK_STATE_CHANGED).setPackage(packageName).putExtra(EXTRA_IS_PLAYING, isPlaying))\n    }\n\n    private fun broadcastWallpaperApplied(message: String) {\n        sendBroadcast(Intent(ACTION_WALLPAPER_APPLIED).setPackage(packageName).putExtra(EXTRA_STATUS_MESSAGE, message))\n    }\n\n    override fun onDestroy() {\n        timelineHandler.removeCallbacks(timelineRunnable)\n        try { activeController?.unregisterCallback(callback) } catch (_: Throwable) {}\n        try { sessionManager?.removeOnActiveSessionsChangedListener(sessionsListener) } catch (_: Throwable) {}\n        try { sharedPrefs.unregisterOnSharedPreferenceChangeListener(preferenceListener) } catch (_: Throwable) {}\n        try { unregisterReceiver(widgetControlReceiver) } catch (_: Throwable) {}\n        try { unregisterReceiver(settingsReceiver) } catch (_: Throwable) {}\n        scope.cancel()\n        super.onDestroy()\n    }\n}\n
+package com.muswall.app.service
+
+import android.app.WallpaperManager
+import android.content.ComponentName
+import android.content.Context
+import android.content.Intent
+import android.content.SharedPreferences
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.drawable.Drawable
+import android.media.MediaMetadata
+import android.app.Notification
+import android.media.session.MediaController
+import android.media.session.MediaSessionManager
+import android.media.session.PlaybackState
+import android.net.Uri
+import android.os.Handler
+import android.os.Looper
+import android.service.notification.NotificationListenerService
+import android.util.Log
+import com.muswall.app.data.PreferencesManager
+import com.muswall.app.python.PythonBridge
+import com.muswall.app.wallpaper.MusicWallpaperService
+import com.muswall.app.wallpaper.WallpaperHelper
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
+import java.net.URLEncoder
+import java.util.concurrent.atomic.AtomicLong
+
+class MediaNotificationListenerService : NotificationListenerService() {
+    companion object {
+        const val ACTION_TRACK_CHANGED = "com.muswall.app.ACTION_TRACK_CHANGED"
+        const val ACTION_PLAYBACK_STATE_CHANGED = "com.muswall.app.ACTION_PLAYBACK_STATE_CHANGED"
+        const val ACTION_WALLPAPER_APPLIED = "com.muswall.app.ACTION_WALLPAPER_APPLIED"
+        const val ACTION_LIVE_TICK = "com.muswall.app.ACTION_LIVE_TICK"
+        const val ACTION_SETTINGS_CHANGED = "com.muswall.app.ACTION_SETTINGS_CHANGED"
+        const val ACTION_WIDGET_PLAY_PAUSE = "com.muswall.app.ACTION_WIDGET_PLAY_PAUSE"
+        const val ACTION_WIDGET_NEXT = "com.muswall.app.ACTION_WIDGET_NEXT"
+        const val ACTION_WIDGET_PREV = "com.muswall.app.ACTION_WIDGET_PREV"
+        const val ACTION_WIDGET_CHANGED = "com.muswall.app.ACTION_WIDGET_CHANGED"
+        const val EXTRA_TRACK_TITLE = "extra_track_title"
+        const val EXTRA_ARTIST = "extra_artist"
+        const val EXTRA_IS_PLAYING = "extra_is_playing"
+        const val EXTRA_STATUS_MESSAGE = "extra_status_message"
+        const val EXTRA_POSITION_MS = "extra_position_ms"
+    }
+
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val timelineHandler = Handler(Looper.getMainLooper())
+    private val stopHandler = Handler(Looper.getMainLooper())
+    private val generation = AtomicLong(0L)
+    private val timelineRunnable = object : Runnable {
+        override fun run() {
+            if (!playing) return
+            val controller = activeController
+            val state = controller?.playbackState
+            val basePosition = state?.position?.coerceAtLeast(0L) ?: prefs.lyricsPosition
+            val updateTime = state?.lastPositionUpdateTime ?: 0L
+            val elapsed = if (updateTime > 0L) (android.os.SystemClock.elapsedRealtime() - updateTime).coerceAtLeast(0L) else 0L
+            val position = (basePosition + elapsed).coerceAtLeast(0L)
+            val jumped = lastObservedPosition >= 0L && kotlin.math.abs(position - lastObservedPosition) > 750L
+            lastObservedPosition = position
+            if (jumped) prefs.lyricsPosition = position
+            sendBroadcast(Intent(ACTION_LIVE_TICK).setPackage(packageName).putExtra(EXTRA_POSITION_MS, position))
+            timelineHandler.postDelayed(this, 1000L)
+        }
+    }
+
+    private lateinit var prefs: PreferencesManager
+    private lateinit var sharedPrefs: SharedPreferences
+    private lateinit var wallpaperHelper: WallpaperHelper
+    private var sessionManager: MediaSessionManager? = null
+    private var activeController: MediaController? = null
+    private var currentTrackId = ""
+    private var playing = false
+    private var lastPlaybackState = PlaybackState.STATE_NONE
+    private var lastObservedPosition = -1L
+    private var generationJob: Job? = null
+    private val stableStopRunnable = Runnable {
+        val state = activeController?.playbackState?.state
+        if (!playing && state != PlaybackState.STATE_PLAYING) finalizePlaybackStop()
+    }
+    private val sessionPollRunnable = object : Runnable {
+        override fun run() {
+            refreshActiveSessions()
+            timelineHandler.postDelayed(this, 1200L)
+        }
+    }
+    private var lyricsJob: Job? = null
+
+    private val preferenceListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        when (key) {
+            "show_lyrics", "lyrics_language" -> {
+                if (playing) activeController?.metadata?.let { handleMetadata(it, true) }
+                refreshLive()
+            }
+            "lyrics_x", "lyrics_y", "lyrics_width", "lyrics_size", "lyrics_lines",
+            "lyrics_color", "lyrics_color2", "lyrics_color3", "lyrics_color_mode", "lyrics_shadow",
+            "bass_enabled", "bass_x", "bass_y", "bass_width", "bass_height", "bass_sensitivity",
+            "bass_color", "bass_color2", "bass_color3", "bass_color_mode" -> refreshLive()
+            "widget_opacity", "widget_show_artwork", "widget_show_title", "widget_show_artist",
+            "widget_show_controls", "widget_show_progress", "widget_show_custom_text", "widget_custom_text",
+            "widget_empty_title", "widget_text_color", "widget_secondary_color", "widget_background_color",
+            "widget_title_size", "widget_artist_size", "widget_custom_text_size", "widget_show_time",
+            "widget_time_label", "widget_corner_radius", "widget_padding", "widget_artwork_size",
+            "widget_layout", "widget_style" -> sendBroadcast(Intent(ACTION_WIDGET_CHANGED).setPackage(packageName))
+        }
+    }
+
+    private val widgetControlReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            val controls = activeController?.transportControls ?: return
+            when (intent?.action) {
+                ACTION_WIDGET_PLAY_PAUSE -> if (playing) controls.pause() else controls.play()
+                ACTION_WIDGET_NEXT -> controls.skipToNext()
+                ACTION_WIDGET_PREV -> controls.skipToPrevious()
+            }
+        }
+    }
+
+    private val settingsReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action != ACTION_SETTINGS_CHANGED) return
+            currentTrackId = ""
+            activeController?.metadata?.let { handleMetadata(it, true) }
+            refreshLive()
+            sendBroadcast(Intent(ACTION_WIDGET_CHANGED).setPackage(packageName))
+        }
+    }
+
+    private val callback = object : MediaController.Callback() {
+        override fun onPlaybackStateChanged(state: PlaybackState?) = handlePlayback(state)
+        override fun onMetadataChanged(metadata: MediaMetadata?) = handleMetadata(metadata, true)
+        override fun onSessionDestroyed() {
+            handlePlayback(null)
+            refreshActiveSessions()
+        }
+    }
+
+    private val sessionsListener = MediaSessionManager.OnActiveSessionsChangedListener { controllers ->
+        selectBestController(controllers)
+    }
+
+    override fun onCreate() {
+        super.onCreate()
+        prefs = PreferencesManager.getInstance(this)
+        sharedPrefs = getSharedPreferences("muswall", Context.MODE_PRIVATE)
+        sharedPrefs.registerOnSharedPreferenceChangeListener(preferenceListener)
+        wallpaperHelper = WallpaperHelper(this)
+        PythonBridge.initialize(this)
+
+        val widgetFilter = android.content.IntentFilter().apply {
+            addAction(ACTION_WIDGET_PLAY_PAUSE)
+            addAction(ACTION_WIDGET_NEXT)
+            addAction(ACTION_WIDGET_PREV)
+        }
+        val settingsFilter = android.content.IntentFilter(ACTION_SETTINGS_CHANGED)
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= 33) {
+                registerReceiver(widgetControlReceiver, widgetFilter, Context.RECEIVER_NOT_EXPORTED)
+                registerReceiver(settingsReceiver, settingsFilter, Context.RECEIVER_NOT_EXPORTED)
+            } else {
+                @Suppress("DEPRECATION") registerReceiver(widgetControlReceiver, widgetFilter)
+                @Suppress("DEPRECATION") registerReceiver(settingsReceiver, settingsFilter)
+            }
+        } catch (t: Throwable) {
+            Log.w("MusWallMedia", "Receiver registration failed", t)
+        }
+    }
+
+    override fun onListenerConnected() {
+        super.onListenerConnected()
+        connectSessions()
+    }
+
+    private fun connectSessions() {
+        try {
+            sessionManager = getSystemService(Context.MEDIA_SESSION_SERVICE) as MediaSessionManager
+            val component = ComponentName(this, MediaNotificationListenerService::class.java)
+            sessionManager?.addOnActiveSessionsChangedListener(sessionsListener, component)
+            refreshActiveSessions()
+            timelineHandler.removeCallbacks(sessionPollRunnable)
+            timelineHandler.post(sessionPollRunnable)
+        } catch (t: Throwable) {
+            Log.w("MusWallMedia", "Media session connection failed", t)
+        }
+    }
+
+    private fun refreshActiveSessions() {
+        try {
+            selectBestController(sessionManager?.getActiveSessions(ComponentName(this, MediaNotificationListenerService::class.java)))
+        } catch (t: Throwable) {
+            Log.w("MusWallMedia", "Active session refresh failed", t)
+        }
+    }
+
+    private fun selectBestController(controllers: List<MediaController>?) {
+        val list = controllers.orEmpty()
+        switchController(
+            list.firstOrNull { it.playbackState?.state == PlaybackState.STATE_PLAYING }
+                ?: list.firstOrNull { it.metadata != null }
+                ?: list.firstOrNull()
+        )
+    }
+
+    private fun switchController(controller: MediaController?) {
+        if (controller?.sessionToken == activeController?.sessionToken) {
+            controller?.playbackState?.let { handlePlayback(it) }
+            controller?.metadata?.let { handleMetadata(it, false) }
+            if (controller == null) handlePlayback(null)
+            return
+        }
+
+        try { activeController?.unregisterCallback(callback) } catch (_: Throwable) {}
+        activeController = controller
+        currentTrackId = ""
+
+        if (controller == null) {
+            handlePlayback(null)
+            broadcastTrack(prefs.lastTrackTitle.ifBlank { "No music detected" }, prefs.lastArtist.ifBlank { "Last played" })
+            return
+        }
+
+        try { controller.registerCallback(callback) } catch (t: Throwable) {
+            Log.w("MusWallMedia", "Controller callback registration failed", t)
+        }
+        handlePlayback(controller.playbackState)
+        controller.metadata?.let { handleMetadata(it, true) }
+    }
+
+    private fun handlePlayback(state: PlaybackState?) {
+        val stateCode = state?.state ?: PlaybackState.STATE_NONE
+        val now = stateCode == PlaybackState.STATE_PLAYING
+        val was = playing
+        if (stateCode == lastPlaybackState && !(now && !was)) return
+        lastPlaybackState = stateCode
+        playing = now
+
+        if (state != null) prefs.lyricsPosition = state.position.coerceAtLeast(0L)
+        prefs.lastPlaybackState = if (now) "playing" else "paused"
+        broadcastPlaybackState(now)
+
+        if (now) {
+            stopHandler.removeCallbacks(stableStopRunnable)
+            timelineHandler.removeCallbacks(timelineRunnable)
+            timelineHandler.post(timelineRunnable)
+            if (!was) {
+                // Some players do not emit metadata reliably when advancing to the next item.
+                currentTrackId = ""
+                activeController?.metadata?.let { handleMetadata(it, true) }
+            }
+        } else {
+            timelineHandler.removeCallbacks(timelineRunnable)
+            // Never call WallpaperManager for a temporary pause/buffer transition.
+            stopHandler.removeCallbacks(stableStopRunnable)
+            stopHandler.postDelayed(stableStopRunnable, 500L)
+        }
+        sendBroadcast(Intent(ACTION_WIDGET_CHANGED).setPackage(packageName))
+    }
+
+    private fun finalizePlaybackStop() {
+        generation.incrementAndGet()
+        generationJob?.cancel()
+        lyricsJob?.cancel()
+        prefs.liveMusicPlaying = false
+        // The live WallpaperService renders the saved original image itself.
+        sendBroadcast(Intent(ACTION_LIVE_TICK).setPackage(packageName).putExtra(EXTRA_POSITION_MS, prefs.lyricsPosition))
+        refreshLive()
+        sendBroadcast(Intent(ACTION_WIDGET_CHANGED).setPackage(packageName))
+        broadcastWallpaperApplied("Music stopped • original wallpaper restored")
+    }
+
+    private fun handleMetadata(metadata:MediaMetadata?,force:Boolean=false){
+        if(metadata==null)return
+        val title=metadata.getString(MediaMetadata.METADATA_KEY_TITLE)?.trim().orEmpty().ifEmpty{"Unknown title"}
+        val artist=metadata.getString(MediaMetadata.METADATA_KEY_ARTIST)?.trim().orEmpty().ifEmpty{"Unknown artist"}
+        prefs.lastTrackTitle=title
+        prefs.lastArtist=artist
+        prefs.lastDuration=metadata.getLong(MediaMetadata.METADATA_KEY_DURATION).coerceAtLeast(0L)
+        broadcastTrack(title,artist)
+        val artUri=metadata.getString(MediaMetadata.METADATA_KEY_ALBUM_ART_URI)?:metadata.getString(MediaMetadata.METADATA_KEY_ART_URI).orEmpty()
+        val mediaId=metadata.getString(MediaMetadata.METADATA_KEY_MEDIA_ID).orEmpty()
+        val id=mediaId+"|"+title+"|"+artist+"|"+artUri
+        if(!force&&id==currentTrackId)return
+        currentTrackId=id
+        prefs.lyricsPosition=activeController?.playbackState?.position?.coerceAtLeast(0L)?:prefs.lyricsPosition
+        if(!prefs.isAutoEnabled||!playing||prefs.wallpaperMode!=PreferencesManager.MODE_MUSIC)return
+        if(!prefs.liveWallpaperEnabled){broadcastWallpaperApplied("Music detected • enable MusWall Live Wallpaper once");return}
+        scope.launch(Dispatchers.IO) { wallpaperHelper.prepareOriginalBeforeLiveWallpaper() }
+        val token=generation.incrementAndGet()
+        generationJob?.cancel()
+        generationJob=scope.launch(Dispatchers.Default){
+            val art=extractArtwork(metadata)
+            try{
+                val immediate=findImmediateLyrics(metadata)
+                if(prefs.showLyrics){prefs.lastLyrics=immediate?:"[00:00.00] Loading lyrics…";refreshLive()}
+                if(art!=null)renderAndSendToLiveWallpaper(art,token,prefs.lastLyrics)else refreshLive()
+                if(prefs.showLyrics){
+                    val resolved=if(immediate!=null)immediate else resolveLyrics(metadata,title,artist)
+                    if(token==generation.get()&&playing){
+                        if(resolved.isNotBlank())prefs.lastLyrics=translateIfNeeded(resolved)
+                        else if(prefs.lastLyrics.contains("Loading lyrics"))prefs.lastLyrics="Lyrics unavailable for this track"
+                        refreshLive()
+                    }
+                }
+            }finally{art?.let{if(!it.isRecycled)it.recycle()}}
+        }
+    }
+    private fun findImmediateLyrics(metadata:MediaMetadata):String?{
+        val direct=metadata.getString("android.media.metadata.LYRICS")?.trim().orEmpty()
+        if(hasLrcTimestamps(direct))return direct
+        for(key in metadata.keySet()){
+            val value=metadata.getString(key)?.trim().orEmpty()
+            if(key.contains("lyric",true)&&hasLrcTimestamps(value))return value
+        }
+        return null
+    }
+    private fun refreshLive() {
+        sendBroadcast(Intent(MusicWallpaperService.ACTION_REFRESH).setPackage(packageName))
+        sendBroadcast(Intent(ACTION_WIDGET_CHANGED).setPackage(packageName))
+    }
+
+    private suspend fun renderAndSendToLiveWallpaper(artwork: Bitmap, token: Long, lyrics: String) {
+        if (token != generation.get() || !playing || !prefs.liveWallpaperEnabled) return
+        val dm = resources.displayMetrics
+        val targetW = dm.widthPixels.coerceAtLeast(480)
+        val targetH = dm.heightPixels.coerceAtLeast(900)
+        wallpaperHelper.saveLastArtwork(artwork)
+        val result = PythonBridge.generateWallpaper(artwork, targetW, targetH, prefs.blurRadius.toFloat(), prefs.darkness / 100f, prefs.artScale / 100f, 42, true, prefs.effect, prefs.blurType, prefs.coverHeight, prefs.coverOffset, prefs.transitionHeight, false, "", prefs.photoSource, "") ?: return
+        try {
+            if (token != generation.get() || !playing || !prefs.liveWallpaperEnabled) return
+            wallpaperHelper.saveCurrentForLiveWallpaper(result)
+            // Never replace the system wallpaper for a track. WallpaperService renders it.
+            prefs.liveMusicPlaying = true
+            refreshLive()
+            broadcastWallpaperApplied(if (prefs.showLyrics && lyrics.isNotBlank()) "Live wallpaper + lyrics updated" else "Live wallpaper updated")
+        } finally {
+            if (!result.isRecycled) result.recycle()
+        }
+    }
+
+    private fun hasLrcTimestamps(text: String): Boolean = Regex("\\[\\d{1,3}:\\d{2}(?:[.:]\\d{1,3})?\\]").containsMatchIn(text)
+
+    private fun resolveLyrics(metadata: MediaMetadata, title: String, artist: String): String {
+        // Always prefer timestamped lyrics so the overlay can follow the exact playback position.
+        val direct = metadata.getString("android.media.metadata.LYRICS")?.trim().orEmpty()
+        if (hasLrcTimestamps(direct)) return direct
+        for (key in metadata.keySet()) {
+            if (!key.contains("lyric", ignoreCase = true)) continue
+            val value = metadata.getString(key)?.trim().orEmpty()
+            if (hasLrcTimestamps(value)) return value
+        }
+
+        // LRCLIB: exact match first, then search. Both attempts prefer syncedLyrics.
+        fetchLyricsFromLrcLib(metadata, title, artist, syncedOnly = true)?.takeIf { it.isNotBlank() }?.let { return it }
+
+        // Some players expose plain lyrics directly. Keep them as a last-resort fallback rather than
+        // returning them before the synced LRCLIB lookup.
+        if (direct.isNotBlank()) return direct
+        for (key in metadata.keySet()) {
+            if (!key.contains("lyric", ignoreCase = true)) continue
+            val value = metadata.getString(key)?.trim().orEmpty()
+            if (value.isNotBlank()) return value
+        }
+
+        // Final LRCLIB request can return plain lyrics if no synchronized copy exists.
+        fetchLyricsFromLrcLib(metadata, title, artist, syncedOnly = false)?.takeIf { it.isNotBlank() }?.let { return it }
+
+        // Independent plain-lyrics fallback. The live renderer will time plain lines
+        // smoothly when no timestamped source exists.
+        return fetchLyricsOvh(title, artist).orEmpty()
+    }
+
+    private fun translateIfNeeded(raw:String):String{
+        val lang=prefs.lyricsLanguage.trim().lowercase()
+        if(lang.isBlank()||lang=="original"||lang=="auto")return raw
+        return try{
+            val lines=raw.replace("\r","").split('\n')
+            val out=ArrayList<String>()
+            var i=0
+            while(i<lines.size){
+                val chunkLines=ArrayList<String>()
+                var chars=0
+                while(i<lines.size&&chars+lines[i].length<420){chunkLines+=lines[i];chars+=lines[i].length+1;i++}
+                val prefixes=chunkLines.map{Regex("^(\\s*\\[[^]]+\\]\\s*)").find(it)?.value?:""}
+                val texts=chunkLines.mapIndexed{idx,line->line.removePrefix(prefixes[idx])}
+                val translated=translateChunk(texts.joinToString("\n"),lang).split('\n')
+                if(translated.size==texts.size)chunkLines.forEachIndexed{idx,_->out+=prefixes[idx]+translated[idx]}else out+=chunkLines
+            }
+            out.joinToString("\n")
+        }catch(_:Throwable){raw}
+    }
+    private fun translateChunk(chunk:String,language:String):String{
+        return try{
+            val q=URLEncoder.encode(chunk,"UTF-8")
+            val target=URLEncoder.encode(language,"UTF-8")
+            val url=URL("https://api.mymemory.translated.net/get?q="+q+"&langpair=auto%7C"+target)
+            val c=url.openConnection() as HttpURLConnection
+            c.requestMethod="GET";c.connectTimeout=4000;c.readTimeout=5000;c.setRequestProperty("User-Agent","MusWall/4.0")
+            try{
+                if(c.responseCode !in 200..299)return chunk
+                JSONObject(c.inputStream.bufferedReader().use{it.readText()}).optJSONObject("responseData")?.optString("translatedText")?.takeIf{it.isNotBlank()}?:chunk
+            }finally{c.disconnect()}
+        }catch(_:Throwable){chunk}
+    }
+    private fun fetchLyricsFromLrcLib(metadata: MediaMetadata, title: String, artist: String, syncedOnly: Boolean): String? {
+        if (title.isBlank() || artist.isBlank()) return null
+        val duration = metadata.getLong(MediaMetadata.METADATA_KEY_DURATION).coerceAtLeast(0L)
+        val exact = tryLrcLibGet(metadata, title, artist, duration, syncedOnly)
+        if (!exact.isNullOrBlank()) return exact
+        return tryLrcLibSearch(title, artist, syncedOnly)
+    }
+
+    private fun tryLrcLibGet(metadata: MediaMetadata, title: String, artist: String, duration: Long, syncedOnly: Boolean): String? {
+        return try {
+            val builder = Uri.Builder().scheme("https").authority("lrclib.net").appendPath("api").appendPath("get").appendQueryParameter("track_name", title).appendQueryParameter("artist_name", artist)
+            metadata.getString(MediaMetadata.METADATA_KEY_ALBUM)?.trim()?.takeIf { it.isNotBlank() }?.let { builder.appendQueryParameter("album_name", it) }
+            if (duration > 0) builder.appendQueryParameter("duration", (duration / 1000L).toString())
+            val connection = (URL(builder.build().toString()).openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"; connectTimeout = 3500; readTimeout = 5000; setRequestProperty("Accept", "application/json"); setRequestProperty("User-Agent", "MusWall/4.0")
+            }
+            try {
+                if (connection.responseCode !in 200..299) return null
+                val root = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+                if (syncedOnly) root.optString("syncedLyrics").trim().takeIf { it.isNotBlank() }
+                else root.optString("syncedLyrics").trim().takeIf { it.isNotBlank() } ?: root.optString("plainLyrics").trim().takeIf { it.isNotBlank() }
+            } finally { connection.disconnect() }
+        } catch (t: Throwable) { Log.d("MusWallLyrics", "LRCLIB exact lookup failed", t); null }
+    }
+
+    private fun tryLrcLibSearch(title: String, artist: String, syncedOnly: Boolean): String? {
+        return try {
+            val query = URLEncoder.encode("$title $artist", "UTF-8")
+            val url = URL("https://lrclib.net/api/search?q=$query")
+            val connection = (url.openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"; connectTimeout = 3500; readTimeout = 6000; setRequestProperty("Accept", "application/json"); setRequestProperty("User-Agent", "MusWall/4.0")
+            }
+            try {
+                if (connection.responseCode !in 200..299) return null
+                val array = org.json.JSONArray(connection.inputStream.bufferedReader().use { it.readText() })
+                var plainFallback: String? = null
+                for (i in 0 until array.length()) {
+                    val item = array.optJSONObject(i) ?: continue
+                    val synced = item.optString("syncedLyrics").trim()
+                    val plain = item.optString("plainLyrics").trim()
+                    if (synced.isNotBlank()) return synced
+                    if (plainFallback == null && plain.isNotBlank()) plainFallback = plain
+                }
+                if (!syncedOnly) plainFallback else null
+            } finally { connection.disconnect() }
+        } catch (t: Throwable) { Log.d("MusWallLyrics", "LRCLIB search failed", t); null }
+    }
+
+    private fun fetchLyricsOvh(title: String, artist: String): String? {
+        return try {
+            val a = URLEncoder.encode(artist, "UTF-8")
+            val t = URLEncoder.encode(title, "UTF-8")
+            val connection = (URL("https://api.lyrics.ovh/v1/$a/$t").openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 3500
+                readTimeout = 5000
+                setRequestProperty("Accept", "application/json")
+                setRequestProperty("User-Agent", "MusWall/4.0")
+            }
+            try {
+                if (connection.responseCode !in 200..299) return null
+                JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+                    .optString("lyrics").trim().takeIf { it.isNotBlank() }
+            } finally { connection.disconnect() }
+        } catch (t: Throwable) {
+            Log.d("MusWallLyrics", "lyrics.ovh fallback failed", t)
+            null
+        }
+    }
+
+    /**
+     * Resolve the artwork for the TRACK that is playing, not merely the album/playlist.
+     *
+     * Automatic priority:
+     *   1. Current media notification artwork (usually the exact Now Playing image)
+     *   2. METADATA_KEY_ART / ART_URI
+     *   3. Display icon
+     *   4. Album artwork as the final fallback
+     *
+     * The Settings > Music photo source selector can force any of these sources.
+     */
+    /**
+     * Resolve the artwork for the TRACK that is playing, not merely the album/playlist.
+     *
+     * Automatic priority:
+     *   1. Current media notification artwork (usually the exact Now Playing image)
+     *   2. METADATA_KEY_ART / ART_URI
+     *   3. Display icon
+     *   4. Album artwork as the final fallback
+     *
+     * The Settings > Music photo source selector can force any of these sources.
+     */
+    /**
+     * Resolve the artwork for the TRACK that is playing, not merely the album/playlist.
+     *
+     * Automatic priority:
+     *   1. Current media notification artwork (usually the exact Now Playing image)
+     *   2. METADATA_KEY_ART / ART_URI
+     *   3. Display icon
+     *   4. Album artwork as the final fallback
+     *
+     * The Settings > Music photo source selector can force any of these sources.
+     */
+    /**
+     * Resolve the artwork for the TRACK that is playing, not merely the album/playlist.
+     *
+     * Automatic priority:
+     *   1. Current media notification artwork (usually the exact Now Playing image)
+     *   2. METADATA_KEY_ART / ART_URI
+     *   3. Display icon
+     *   4. Album artwork as the final fallback
+     *
+     * The Settings > Music photo source selector can force any of these sources.
+     */
+    /**
+     * Resolve the artwork for the TRACK that is playing, not merely the album/playlist.
+     *
+     * Automatic priority:
+     *   1. Current media notification artwork (usually the exact Now Playing image)
+     *   2. METADATA_KEY_ART / ART_URI
+     *   3. Display icon
+     *   4. Album artwork as the final fallback
+     *
+     * The Settings > Music photo source selector can force any of these sources.
+     */
+    /**
+     * Resolve the artwork for the TRACK that is playing, not merely the album/playlist.
+     *
+     * Automatic priority:
+     *   1. Current media notification artwork (usually the exact Now Playing image)
+     *   2. METADATA_KEY_ART / ART_URI
+     *   3. Display icon
+     *   4. Album artwork as the final fallback
+     *
+     * The Settings > Music photo source selector can force any of these sources.
+     */
+    private fun extractArtwork(metadata: MediaMetadata): Bitmap? {
+        return try {
+            val source = prefs.photoSource
+            val primary = when (source) {
+                PreferencesManager.PHOTO_NOTIFICATION -> notificationArtwork(metadata)
+                PreferencesManager.PHOTO_ART -> metadataArt(metadata)
+                PreferencesManager.PHOTO_DISPLAY_ICON -> displayIconArtwork(metadata)
+                PreferencesManager.PHOTO_ALBUM -> albumArtwork(metadata)
+                PreferencesManager.PHOTO_CUSTOM -> customPhotoArtwork()
+                else -> notificationArtwork(metadata)
+                    ?: metadataArt(metadata)
+                    ?: displayIconArtwork(metadata)
+                    ?: albumArtwork(metadata)
+            }
+
+            if (primary != null) return primary
+            if (!prefs.photoFallback) return null
+
+            // If the selected source is unavailable, never leave the wallpaper blank.
+            when (source) {
+                PreferencesManager.PHOTO_NOTIFICATION -> metadataArt(metadata) ?: albumArtwork(metadata)
+                PreferencesManager.PHOTO_ART -> notificationArtwork(metadata) ?: albumArtwork(metadata)
+                PreferencesManager.PHOTO_DISPLAY_ICON -> notificationArtwork(metadata) ?: metadataArt(metadata) ?: albumArtwork(metadata)
+                PreferencesManager.PHOTO_ALBUM -> notificationArtwork(metadata) ?: metadataArt(metadata)
+                PreferencesManager.PHOTO_CUSTOM -> notificationArtwork(metadata) ?: metadataArt(metadata) ?: albumArtwork(metadata)
+                else -> null
+            }
+        } catch (t: Throwable) {
+            Log.w("MusWallMedia", "Artwork extraction failed", t)
+            null
+        }
+    }
+
+    private fun metadataArt(metadata: MediaMetadata): Bitmap? {
+        metadata.getBitmap(MediaMetadata.METADATA_KEY_ART)?.let { return downsampleArtwork(it) }
+        val uri = metadata.getString(MediaMetadata.METADATA_KEY_ART_URI).orEmpty()
+        return bitmapFromUri(uri)
+    }
+
+    private fun albumArtwork(metadata: MediaMetadata): Bitmap? {
+        metadata.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART)?.let { return downsampleArtwork(it) }
+        val uri = metadata.getString(MediaMetadata.METADATA_KEY_ALBUM_ART_URI).orEmpty()
+        return bitmapFromUri(uri)
+    }
+
+    private fun displayIconArtwork(metadata: MediaMetadata): Bitmap? {
+        metadata.getBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON)?.let { return downsampleArtwork(it) }
+        val uri = metadata.getString(MediaMetadata.METADATA_KEY_DISPLAY_ICON_URI).orEmpty()
+        return bitmapFromUri(uri)
+    }
+
+    /** Prefer the media notification's large icon because many players put their actual
+     * current-track artwork here even when MediaMetadata exposes album/playlist art. */
+    private fun notificationArtwork(metadata: MediaMetadata): Bitmap? {
+        val packageName = activeController?.packageName ?: return null
+        val title = metadata.getString(MediaMetadata.METADATA_KEY_TITLE)?.trim().orEmpty()
+        val artist = metadata.getString(MediaMetadata.METADATA_KEY_ARTIST)?.trim().orEmpty()
+        val notifications = activeNotifications.orEmpty().filter { it.packageName == packageName }
+
+        val matching = notifications.firstOrNull { sbn ->
+            val extras = sbn.notification.extras
+            val nTitle = extras?.getCharSequence(Notification.EXTRA_TITLE)?.toString()?.trim().orEmpty()
+            val nText = extras?.getCharSequence(Notification.EXTRA_TEXT)?.toString()?.trim().orEmpty()
+            (title.isNotBlank() && nTitle.equals(title, ignoreCase = true)) ||
+                (title.isNotBlank() && nText.contains(title, ignoreCase = true)) ||
+                (artist.isNotBlank() && nText.contains(artist, ignoreCase = true))
+        }
+        val transport = notifications.firstOrNull { it.notification.category == Notification.CATEGORY_TRANSPORT }
+        val candidates = listOfNotNull(matching, transport) + notifications
+
+        for (sbn in candidates.distinctBy { it.key }) {
+            val icon = runCatching { sbn.notification.getLargeIcon() }.getOrNull() ?: continue
+            val drawable = runCatching { icon.loadDrawable(this) }.getOrNull() ?: continue
+            val bitmap = drawableToBitmap(drawable) ?: continue
+            return downsampleArtwork(bitmap)
+        }
+        return null
+    }
+
+    private fun customPhotoArtwork(): Bitmap? {
+        val uriText = prefs.customPhotoUri.trim()
+        return if (uriText.isBlank()) null else bitmapFromUri(uriText)
+    }
+
+    private fun bitmapFromUri(uriText: String): Bitmap? {
+        if (uriText.isBlank()) return null
+        return runCatching {
+            contentResolver.openInputStream(Uri.parse(uriText)).use { input ->
+                if (input == null) null else BitmapFactory.decodeStream(input)?.let { downsampleArtwork(it) }
+            }
+        }.getOrNull()
+    }
+
+    private fun drawableToBitmap(drawable: Drawable): Bitmap? {
+        val width = drawable.intrinsicWidth.takeIf { it > 0 } ?: 512
+        val height = drawable.intrinsicHeight.takeIf { it > 0 } ?: 512
+        val bitmap = Bitmap.createBitmap(width.coerceAtMost(2048), height.coerceAtMost(2048), Bitmap.Config.ARGB_8888)
+        Canvas(bitmap).also { canvas ->
+            drawable.setBounds(0, 0, canvas.width, canvas.height)
+            drawable.draw(canvas)
+        }
+        return bitmap
+    }
+
+    private fun downsampleArtwork(bitmap: Bitmap): Bitmap? {
+        return try {
+            val max = 1600
+            val scale = minOf(1f, max.toFloat() / maxOf(bitmap.width, bitmap.height))
+            if (scale >= 0.999f) bitmap else Bitmap.createScaledBitmap(bitmap, (bitmap.width * scale).toInt().coerceAtLeast(1), (bitmap.height * scale).toInt().coerceAtLeast(1), true)
+        } catch (_: Throwable) { bitmap }
+    }
+
+    private fun broadcastTrack(title: String, artist: String) {
+        sendBroadcast(Intent(ACTION_TRACK_CHANGED).setPackage(packageName).putExtra(EXTRA_TRACK_TITLE, title).putExtra(EXTRA_ARTIST, artist))
+    }
+
+    private fun broadcastPlaybackState(isPlaying: Boolean) {
+        sendBroadcast(Intent(ACTION_PLAYBACK_STATE_CHANGED).setPackage(packageName).putExtra(EXTRA_IS_PLAYING, isPlaying))
+    }
+
+    private fun broadcastWallpaperApplied(message: String) {
+        sendBroadcast(Intent(ACTION_WALLPAPER_APPLIED).setPackage(packageName).putExtra(EXTRA_STATUS_MESSAGE, message))
+    }
+
+    override fun onDestroy() {
+        timelineHandler.removeCallbacks(timelineRunnable)
+        try { activeController?.unregisterCallback(callback) } catch (_: Throwable) {}
+        try { sessionManager?.removeOnActiveSessionsChangedListener(sessionsListener) } catch (_: Throwable) {}
+        try { sharedPrefs.unregisterOnSharedPreferenceChangeListener(preferenceListener) } catch (_: Throwable) {}
+        try { unregisterReceiver(widgetControlReceiver) } catch (_: Throwable) {}
+        try { unregisterReceiver(settingsReceiver) } catch (_: Throwable) {}
+        scope.cancel()
+        super.onDestroy()
+    }
+}
