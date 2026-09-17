@@ -11,7 +11,10 @@ import android.graphics.Canvas
 import android.graphics.drawable.Drawable
 import android.graphics.Canvas
 import android.graphics.drawable.Drawable
+import android.graphics.Canvas
+import android.graphics.drawable.Drawable
 import android.media.MediaMetadata
+import android.app.Notification
 import android.app.Notification
 import android.app.Notification
 import android.media.session.MediaController
@@ -484,6 +487,17 @@ class MediaNotificationListenerService : NotificationListenerService() {
         }
     }
 
+    /**
+     * Resolve the artwork for the TRACK that is playing, not merely the album/playlist.
+     *
+     * Automatic priority:
+     *   1. Current media notification artwork (usually the exact Now Playing image)
+     *   2. METADATA_KEY_ART / ART_URI
+     *   3. Display icon
+     *   4. Album artwork as the final fallback
+     *
+     * The Settings > Music photo source selector can force any of these sources.
+     */
     /**
      * Resolve the artwork for the TRACK that is playing, not merely the album/playlist.
      *
