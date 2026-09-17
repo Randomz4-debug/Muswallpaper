@@ -144,5 +144,5 @@ for line in lines:
             continue
         seen.add(line)
     normalized.append(line)
-MEDIA.write_text("\\n".join(normalized) + "\\n")
+MEDIA.write_text("\n".join(normalized) + "\n")
 print('Current-track artwork selection patched: notification > track ART > display icon > album, with selectable source modes and fallbacks.')
