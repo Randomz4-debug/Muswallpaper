@@ -1,4 +1,5 @@
 name: Build SoundWall APK
+# Build recheck: manual quality settings + compile fixes
 
 on:
   workflow_dispatch:
